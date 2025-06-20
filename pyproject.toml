@@ -1,18 +1,18 @@
 [project]
 name = "tirex"
 version = "1.0.0"
+description = "A pre-trained Time Series Forecasting Model based on xLSTM supporting zero-shot forecasting"
 authors = [
   { name="Andreas Auer", email="andreas.auer@nx-ai.com" },
 ]
-description = "A pre-trained Time Series Forecasting Model based on xLSTM supporting zero-shot forecasting"
+license = {text = "LICENSE"}
 readme = "README.md"
-license = {file="LICENSE"}
 requires-python = ">=3.11"
+keywords = ["TiRex", "xLSTM", "Time Series", "Zero-shot", "Deep Learning"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-keywords = ["TiRex", "xLSTM", "Time Series", "Zero-shot", "Deep Learning"]
 dependencies = [
     "torch",
     "torchvision",
@@ -28,23 +28,29 @@ dependencies = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/NX-AI/tirex"
 Repository = "https://github.com/NX-AI/tirex"
-Issues = "https://github.com/NX-AI/tirex/issues"
+Documentation = "https://github.com/NX-AI/tirex/blob/main/README.md"
 
 [project.optional-dependencies]
 notebooks = ["ipykernel"]
 gluonts = ["gluonts"]
 hfdataset = ["datasets"]
-all = [
-    "ipykernel",
-    "gluonts",
-    "datasets",
-]
+all = ["ipykernel", "gluonts", "datasets"]
 
-# build system
+[tool.poetry]
+# name, version, authors removed as they are in [project]
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = {version = "*", optional = true}
+gluonts = {version = "*", optional = true}
+datasets = {version = "*", optional = true}
+
+# [tool.poetry.extras] section removed
+
 [build-system]
-requires = ["setuptools>=42", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
 
 # docformatter
 [tool.docformatter]
