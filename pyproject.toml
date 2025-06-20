@@ -46,6 +46,7 @@ all = ["ipykernel", "gluonts", "datasets"]
 ipykernel = {version = "*", optional = true}
 gluonts = {version = "*", optional = true}
 datasets = {version = "*", optional = true}
+pytest = "*"
 pytest-cov = "*"
 
 # build system
