@@ -1,0 +1,19 @@
+#version: "3.9"
+#
+services:
+  tirex:
+      build:
+        context: .
+#        no_cache: true
+      image: tirex:dev
+      volumes:
+        - C:/Users/rilah/PycharmProjects/HGOMatFit:/opt/project
+#      environment:
+#        PYCHARM_DEBUG_HOST: "host.docker.internal"
+#      extra_hosts:
+#        - "host.docker.internal:host-gateway"
+#      ports:
+#        - "38765:38765"
+#      ports:
+#        - "8888:8888"  # Maps host port 8888 to container port 8888
+#      command: jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root
