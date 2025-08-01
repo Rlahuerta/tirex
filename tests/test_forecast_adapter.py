@@ -21,7 +21,8 @@ def dummy_fc_func():
 
 
 class DummyForecaster(ForecastModel):
-    def _forecast_quantiles(self, batch: torch.Tensor, **kwargs):
+    @staticmethod
+    def _forecast_quantiles(batch: torch.Tensor, **kwargs):
         return fc_random_from_tensor(batch, **kwargs)
 
 
