@@ -15,7 +15,7 @@ project_local_path = Path(__file__).resolve().parent
 project_root = project_local_path.parent.parent
 sys.path.append(str(project_root))
 
-from src.tirex import ForecastModel, load_model
+from tirex import ForecastModel, load_model
 
 def plot_fc(ctx, quantile_fc, real_future_values=None, start_date=None):
     """
