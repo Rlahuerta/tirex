@@ -39,7 +39,7 @@ def TDMAsolver(a: np.ndarray, b: np.ndarray, c: np.ndarray, d: np.ndarray) -> np
     for i in range(1, n):
         denom = b[i] - a[i] * cp[i - 1]
         if denom == 0:  # Avoid division by zero
-            denom = 1e-18  # Add small epsilon or handle as singular
+            denom = np.finfo(d.dtype).eps  # Add small epsilon or handle as singular
         if i < n - 1:  # c is defined up to n-2 for cp
             cp[i] = c[i] / denom
         dp[i] = (d[i] - a[i] * dp[i - 1]) / denom
@@ -666,13 +666,13 @@ class EMD:
                 rsym = len(S) - 1
 
         # In case any array missing
-        if not lmin.size:
+        if lmin.size == 0:
             lmin = ind_min
-        if not rmin.size:
+        if rmin.size == 0:
             rmin = ind_min
-        if not lmax.size:
+        if lmax.size == 0:
             lmax = ind_max
-        if not rmax.size:
+        if rmax.size == 0:
             rmax = ind_max
 
         # Mirror points
@@ -920,7 +920,7 @@ class EMD:
             dd = np.diff(np.append(np.append(0, bad), 0))
             debs = np.nonzero(dd == 1)[0]
             fins = np.nonzero(dd == -1)[0]
-            if debs[0] == 1:
+            if len(debs) > 0 and debs[0] == 1:
                 if len(debs) > 1:
                     debs, fins = debs[1:], fins[1:]
                 else:
@@ -1039,7 +1039,7 @@ class EMD:
     @staticmethod
     def _common_dtype(x: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Casts inputs (x, y) into a common numpy DTYPE."""
-        dtype = np.find_common_type([x.dtype, y.dtype], [])
+        dtype = np.result_type(x.dtype, y.dtype)
         if x.dtype != dtype:
             x = x.astype(dtype)
         if y.dtype != dtype:
