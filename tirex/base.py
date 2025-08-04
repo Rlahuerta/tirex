@@ -34,8 +34,10 @@ class PretrainedModel(ABC):
         else:
             repo_id = parse_hf_repo_id(path)
             checkpoint_path = hf_hub_download(repo_id=repo_id, filename="model.ckpt", **hf_kwargs)
+
         model = cls.load_from_checkpoint(checkpoint_path, map_location=device, **ckp_kwargs)
         model.after_load_from_checkpoint()
+
         return model
 
     @classmethod

@@ -3,12 +3,13 @@ import unittest
 import numpy as np
 import matplotlib.pyplot as plt
 
-from pathlib import Path
+# from pathlib import Path
 from joblib import load
-from typing import Tuple, Dict, Union
+from typing import Tuple
 from scipy.signal import welch
 
-from tirex.utils.ceemdan import EEMD, CEEMDAN, ICEEMDAN, EMDVisualisation
+from tirex.utils.ceemdan import EEMD, CEEMDAN, ICEEMDAN
+from tirex.utils.plot import EMDVisualisation, emd_plot
 from . import test_data_path, full_timeseries_data, unit_test_plots_path
 
 unit_test_ceemdan_plots_path = (unit_test_plots_path / 'ceemdan').resolve()
@@ -16,60 +17,6 @@ os.makedirs(unit_test_ceemdan_plots_path, exist_ok=True)
 
 unit_test_iceemdan_plots_path = (unit_test_plots_path / 'iceemdan').resolve()
 os.makedirs(unit_test_iceemdan_plots_path, exist_ok=True)
-
-def emd_plot(inp_time: np.ndarray,
-             inp_signal: np.ndarray,
-             emd_signal: np.ndarray,
-             plot_title: str,
-             plot_name: str,
-             res_signal: Union[np.ndarray, Dict[str, np.ndarray], None] = None,
-             ):
-    """Helper function to plot EMD/CEEMDAN results."""
-
-    num_plots = emd_signal.shape[0] + 1
-    ini_idx = 1
-
-    if res_signal is not None:
-        num_plots += 1
-        ini_idx = 2
-
-    fig, ax = plt.subplots(num_plots, 1, figsize=(15, 12))
-    fig.suptitle(plot_title, fontsize=12)
-
-    ax[0].plot(inp_time, inp_signal, 'r')
-    ax[0].plot(inp_time, emd_signal.sum(axis=0), 'blue', dashes=[2, 4])
-
-    ax[0].set_ylabel("Original signal")
-    ax[0].grid(which='minor', alpha=0.2)
-    ax[0].grid(which='major', alpha=0.5)
-
-    if res_signal is not None:
-        ax[1].set_ylabel("Residuum")
-        ax[1].grid(which='minor', alpha=0.2)
-        ax[1].grid(which='major', alpha=0.5)
-
-        if isinstance(res_signal, np.ndarray):
-            ax[1].plot(inp_time, res_signal, 'r')
-
-        elif isinstance(res_signal, Dict):
-            for i, (key_i, val_i) in enumerate(res_signal.items()):
-                if i == 0:
-                    ax[1].plot(inp_time, val_i, 'r', label=key_i)
-                else:
-                    ax[1].plot(inp_time, val_i, '.', label=key_i)
-
-            ax[1].legend(loc='best')
-
-    for i, n in enumerate(range(ini_idx, num_plots)):
-        ax[n].plot(inp_time, emd_signal[i, :], 'g')
-        ax[n].set_ylabel("eIMF %i" % (i + 1))
-        ax[n].locator_params(axis='y', nbins=5)
-        ax[n].grid(which='minor', alpha=0.2)
-        ax[n].grid(which='major', alpha=0.5)
-
-    ax[-1].set_xlabel("Time [s]")
-    fig.tight_layout()
-    fig.savefig(f'{plot_name}', dpi=200)
 
 
 def create_test_signal(n_points: int = 2000) -> Tuple[np.ndarray, np.ndarray]:
