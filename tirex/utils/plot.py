@@ -2,10 +2,18 @@ import numpy as np
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 from matplotlib import pyplot as plt
 from scipy.signal import hilbert
+from sympy.abc import alpha
+
 from tirex.utils.ceemdan import filt6, pade6
 
 
-def plot_fc(ctx, quantile_fc, real_future_values=None, save_path=None):
+def plot_fc(ctx,
+            quantile_fc: np.ndarray,
+            full_timeseries: np.ndarray = None,
+            real_future_values: np.ndarray = None,
+            title: str = None,
+            save_path=None,
+            ):
     """
     Plots the forecast against the historical context and, optionally, the ground truth future values.
 
@@ -13,6 +21,7 @@ def plot_fc(ctx, quantile_fc, real_future_values=None, save_path=None):
         ctx (array-like): The historical context data.
         quantile_fc (array-like): The quantile forecast data, expected to have 9 quantiles.
         real_future_values (array-like, optional): The ground truth future values. Defaults to None.
+        title
         save_path (str, optional): If provided, the plot will be saved to this path instead of being displayed.
                                    Defaults to None.
     """
@@ -20,19 +29,29 @@ def plot_fc(ctx, quantile_fc, real_future_values=None, save_path=None):
     lower_bound = quantile_fc[:, 0]
     upper_bound = quantile_fc[:, 8]
 
-    original_x = range(len(ctx))
-    forecast_x = range(len(ctx), len(ctx) + len(median_forecast))
+    np_x = np.arange(0, len(ctx) + len(median_forecast))
+
+    original_x = np_x[:len(ctx)]
+    forecast_x = np_x[len(ctx):]
 
     # Plotting
     plt.figure(figsize=(12, 6))
+
+    if title is not None:
+        plt.title(title)
+
     plt.plot(original_x, ctx, label="Ground Truth Context", color="#4a90d9")
     if real_future_values is not None:
-        original_fut_x = range(len(ctx), len(ctx) + len(real_future_values))
-        plt.plot(original_fut_x, real_future_values, label="Ground Truth Future", color="#4a90d9", linestyle=":")
+        plt.plot(forecast_x, real_future_values, label="Ground Truth Future", color="#4a90d9", linestyle=":")
+
+    if full_timeseries is not None:
+        plt.plot(np_x, full_timeseries, color="grey", alpha=0.5, linestyle=":")
+
     plt.plot(forecast_x, median_forecast, label="Forecast (Median)", color="#d94e4e", linestyle="--")
     plt.fill_between(
         forecast_x, lower_bound, upper_bound, color="#d94e4e", alpha=0.1, label="Forecast 10% - 90% Quantiles"
     )
+
     plt.xlim(left=0)
     plt.legend()
     plt.grid(True)
