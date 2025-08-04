@@ -699,7 +699,7 @@ class EmpiricalWaveletTransform:
         end_spt = self.nsupport[-1]
         np_nsupport_k = np.arange(stt_spt, end_spt, dt_spt)
 
-        if opt is False:
+        if not opt:
             for _ in range(8):
                 for n_i in np_nsupport_k:
                     if dict_output.get(n_i) is None:
@@ -761,8 +761,10 @@ class EmpiricalWaveletTransform:
             return np_signal_ft, out_i, nsupport
 
 
-def ewt_decomp(signal_data: pd.Series, ftype: FilterType = FilterType.WAVELET, mbcs: int = 5) -> \
-        (pd.DataFrame, np.ndarray):
+def ewt_decomp(signal_data: pd.Series,
+               ftype: FilterType = FilterType.WAVELET,
+               mbcs: int = 5,
+               ) -> (pd.DataFrame, np.ndarray):
 
     np_signal = signal_data.values
     np_date = signal_data.index.values.astype('datetime64[s]')
