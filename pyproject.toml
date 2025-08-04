@@ -23,6 +23,7 @@ dependencies = [
     "lightning",
     "numpy",
     "pandas",
+    "PyWavelets",
     "dacite",
     "tqdm"
 ]

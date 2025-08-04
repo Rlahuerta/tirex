@@ -268,3 +268,51 @@ class EMDVisualisation:
 
     def show(self):
         plt.show()
+
+
+def decomp_plot(x: np.ndarray, y_original: np.ndarray, decomp_signal: [np.ndarray], file_path: str):
+
+    fig_size = (40, 20)
+
+    ndecomp = len(decomp_signal)
+
+    fig, ax = plt.subplots((ndecomp + 1), 1, figsize=fig_size, sharex=True, dpi=180)
+    fig.suptitle(f'nvars ({x.shape[0]}), signal ({len(decomp_signal)}), EWT-Decomp', fontsize=12)
+
+    ax[0].plot(x, y_original, label='Signal')
+
+    ax[0].grid(which='minor', alpha=0.2)
+    ax[0].grid(which='major', alpha=0.5)
+    ax[0].legend()
+
+    for i, signal_i in enumerate(decomp_signal):
+        idx = i + 1
+        ax[idx].plot(x, signal_i, label=f'D{i}')
+
+        ax[idx].grid(which='minor', alpha=0.2)
+        ax[idx].grid(which='major', alpha=0.5)
+        ax[idx].legend()
+
+    fig.savefig(file_path)
+    plt.close()
+
+
+def save_plot(x: np.ndarray, y_original: np.ndarray, y_filtered: np.ndarray, title: str, file_path: str):
+
+    fig_size = (40, 20)
+    fsize = 20
+
+    fig, ax = plt.subplots(figsize=fig_size, dpi=140)
+    fig.suptitle(title, fontsize=fsize)
+
+    ax.plot(x, y_original, label="Original Signal", alpha=0.7)
+    ax.plot(x, y_filtered, label="Filtered Signal", linewidth=2)
+    ax.set_xlabel("Time", fontsize=fsize)
+    ax.set_ylabel("Amplitude", fontsize=fsize)
+    ax.legend()
+
+    ax.grid(which='minor', alpha=0.2)
+    ax.grid(which='major', alpha=0.5)
+
+    fig.savefig(file_path)
+    plt.close()
