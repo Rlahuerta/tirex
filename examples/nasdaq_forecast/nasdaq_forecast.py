@@ -1,8 +1,8 @@
 
-import os
+# import os
 # os.environ["TIREX_NO_CUDA"] = "1"
 # os.environ['TORCH_CUDA_ARCH_LIST']
-import sys
+# import sys
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -10,8 +10,8 @@ import yfinance as yf
 
 from tirex import ForecastModel, load_model
 from tirex.utils.filters import ConvolutionFilter
-from tirex.utils.ceemdan import EEMD, CEEMDAN, ICEEMDAN
-from tirex.utils.ewt import EmpiricalWaveletTransform, ewt_decomp
+from tirex.utils.ceemdan import ICEEMDAN
+from tirex.utils.ewt import EmpiricalWaveletTransform
 from tirex.utils.plot import plot_fc, emd_plot
 
 # Add the project root to the Python path
@@ -188,68 +188,72 @@ def ewt_forecast():
         inc_i = i * 10
         inp_idx = inp_idx + inc_i
         out_idx = out_idx + inc_i
-        full_idx = np.arange(inp_idx[0], out_idx[-1] + 1)[-(plt_len + out_len):]
+        full_idx_i = np.arange(inp_idx[0], out_idx[-1] + 1)[-(plt_len + out_len):]
 
-        sr_x_i = nasdaq_data.iloc[inp_idx, :]
-        sr_y_i = nasdaq_data.iloc[out_idx, :]
+        if out_idx[-1] < nasdaq_data.shape[0]:
+            sr_x_i = nasdaq_data.iloc[inp_idx, :]
+            sr_y_i = nasdaq_data.iloc[out_idx, :]
 
-        np_x_i = sr_x_i.values[:, 0]
-        np_x_ft_i = convolution_filter(np_x_i)
-        np_x_ft2_i = convolution_filter_smooth(np_x_i)
-        np_y_i = sr_y_i.values[:, 0]
+            np_x_i = sr_x_i.values[:, 0]
+            np_x_ft_i = convolution_filter(np_x_i)
+            np_x_ft2_i = convolution_filter_smooth(np_x_i)
+            np_y_i = sr_y_i.values[:, 0]
 
-        local_plot_path_i = (local_plot_path / f"trial_{i}").resolve()
-        local_plot_path_i.mkdir(exist_ok=True)
+            local_plot_path_i = (local_plot_path / f"trial_{i}").resolve()
+            local_plot_path_i.mkdir(exist_ok=True)
 
-        list_inp_win.append(np_x_i)
-        list_out_win.append(np_y_i)
+            list_inp_win.append(np_x_i)
+            list_out_win.append(np_y_i)
 
-        # First run
-        ewt_res_i, np_mwvlt_i, np_bcs_i = ewt(np_x_ft_i, 6)
-        ewt_comps_i = ewt_res_i.T
+            # First run
+            ewt_res_i, np_mwvlt_i, np_bcs_i = ewt(np_x_ft_i, 6)
+            ewt_comps_i = ewt_res_i.T
 
-        # Plot results
-        emd_plot(np_ewt_x[-clen:], np_x_i[-clen:], ewt_comps_i[:, -clen:],
-                 plot_title=f"EWT Unit Test Case i: {i}",
-                 plot_name=f'{local_plot_path_i}/full_decomposition.png')
+            # Plot results
+            emd_plot(np_ewt_x[-clen:], np_x_i[-clen:], ewt_comps_i[:, -clen:],
+                     plot_title=f"EWT Unit Test Case i: {i}",
+                     plot_name=f'{local_plot_path_i}/full_decomposition.png')
 
-        list_quantiles_i = []
-        list_mean_i = []
+            list_quantiles_i = []
+            list_mean_i = []
 
-        select_imfs_i = np.arange(0, ewt_comps_i.shape[0])
+            select_imfs_i = np.arange(0, ewt_comps_i.shape[0])
 
-        for k in select_imfs_i:
-            np_signal_x_k = ewt_comps_i[k, :]
-            quantiles_y_k, mean_y_k = model.forecast(np_signal_x_k[:-bclen],
-                                                 prediction_length=bclen + out_len,
+            for k in select_imfs_i:
+                np_signal_x_k = ewt_comps_i[k, :]
+                quantiles_y_k, mean_y_k = model.forecast(np_signal_x_k[:-bclen],
+                                                     prediction_length=bclen + out_len,
+                                                     output_type="numpy",
+                                                     )
+                plot_fc(np_signal_x_k[-plt_len:], quantiles_y_k[0][bclen:],
+                        save_path=f'{local_plot_path_i}/ewt_signal_{k}_pred.png')
+
+                list_quantiles_i.append(quantiles_y_k[0][bclen:])
+                list_mean_i.append(mean_y_k[0][bclen:])
+
+            ewt_quantiles_i = np.asarray(list_quantiles_i).sum(axis=0)
+            ewt_mean_i = np.asarray(list_mean_i).sum(axis=0)
+
+            plot_fc(np_x_i[-plt_len:], ewt_quantiles_i,
+                    real_future_values=np_y_i[bclen:],
+                    full_timeseries=nasdaq_data.iloc[full_idx_i, :].values[:, 0],
+                    title=f"End Time: {sr_x_i.index[bclen:][-1]}",
+                    save_path=f'{local_plot_path_i}/ewt_signal_sum_pred.png')
+
+            # trying to forescat using full data
+            quantiles_i, mean_i = model.forecast(np_x_ft2_i[:-bclen],
+                                                 prediction_length=out_len + bclen,
                                                  output_type="numpy",
                                                  )
-            plot_fc(np_signal_x_k[-plt_len:], quantiles_y_k[0][bclen:],
-                    save_path=f'{local_plot_path_i}/ewt_signal_{k}_pred.png')
 
-            list_quantiles_i.append(quantiles_y_k[0][bclen:])
-            list_mean_i.append(mean_y_k[0][bclen:])
+            plot_fc(np_x_i[-plt_len:], quantiles_i[0][bclen:],
+                    real_future_values=np_y_i[bclen:],
+                    full_timeseries=nasdaq_data.iloc[full_idx_i, :].values[:, 0],
+                    title=f"End Time: {sr_x_i.index[bclen:][-1]}",
+                    save_path=f'{local_plot_path_i}/full_signal_pred.png')
 
-        ewt_quantiles_i = np.asarray(list_quantiles_i).sum(axis=0)
-        ewt_mean_i = np.asarray(list_mean_i).sum(axis=0)
-
-        plot_fc(np_x_i[-plt_len:], ewt_quantiles_i,
-                real_future_values=np_y_i[bclen:],
-                full_timeseries=nasdaq_data.iloc[full_idx, :].values[:, 0],
-                title=f"End Time: {sr_x_i.index[bclen:][-1]}",
-                save_path=f'{local_plot_path_i}/ewt_signal_sum_pred.png')
-
-        # trying to forescat using full data
-        quantiles_i, mean_i = model.forecast(np_x_ft2_i[:-bclen],
-                                             prediction_length=out_len + bclen,
-                                             output_type="numpy",
-                                             )
-
-        plot_fc(np_x_i[-plt_len:], quantiles_i[0][bclen:],
-                real_future_values=np_y_i[bclen:],
-                full_timeseries=nasdaq_data.iloc[full_idx, :].values[:, 0],
-                title=f"End Time: {sr_x_i.index[bclen:][-1]}",
-                save_path=f'{local_plot_path_i}/full_signal_pred.png')
+        else:
+            break
 
 
 if __name__ == "__main__":

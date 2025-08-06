@@ -629,7 +629,11 @@ class EmpiricalWaveletTransform:
 
         return np_ewt_res, np_mwvlt, np_bcs
 
-    def __call__(self, signal: np.ndarray, nsignals: int, mbcs: float = None) -> (npt.NDArray, npt.NDArray, npt.NDArray):
+    def __call__(self,
+                 signal: np.ndarray,
+                 nsignals: int,
+                 mbcs: float = None,
+                 ) -> (npt.NDArray, npt.NDArray, npt.NDArray):
         """
         Perform the Empirical Wavelet Transform of np_fft over N scales. See also the documentation of ewt_bcs_detect
         for more details about the available methods and their parameters.

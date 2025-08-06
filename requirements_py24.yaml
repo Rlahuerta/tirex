@@ -17,6 +17,8 @@ dependencies:
   - ninja
   - cuda-cccl=12.4
   - cuda-toolkit=12.4
+  - glpk
+  - pyomo~=6.9.2
   - pip:
       - xlstm~=2.0.3
       - einops~=0.8.1
@@ -25,4 +27,6 @@ dependencies:
       - numpy~=2.1.3
       - pandas~=2.2.3
       - dacite~=1.9.2
+      - yfinance
+      - PyWavelets
       - pytest

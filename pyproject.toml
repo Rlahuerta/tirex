@@ -24,6 +24,7 @@ dependencies = [
     "numpy",
     "pandas",
     "PyWavelets",
+    "pyomo",
     "dacite",
     "tqdm"
 ]

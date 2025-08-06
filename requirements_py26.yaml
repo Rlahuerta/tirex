@@ -14,6 +14,9 @@ dependencies:
   - ninja
   - cuda-toolkit=12.6
   - cuda-cccl=12.6
+  - glpk
+  - pyomo~=6.9.2
+  - ipopt
   - pip:
       - --index-url https://download.pytorch.org/whl/cu126
       - --extra-index-url https://pypi.org/simple
