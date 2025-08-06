@@ -1,5 +1,7 @@
 
 from pathlib import Path
+import time
+import datetime
 import numpy as np
 import pandas as pd
 
@@ -89,21 +91,22 @@ class OptEWTForecast:
 
         self.np_idx_inc_eval = np.array(list_incs, dtype=int)
 
-    def objective(self, dsvars: np.ndarray) -> float:
+    def objective(self, dsvars: pd.Series) -> float:
 
-        window = dsvars[0]
-        bclen = dsvars[1]
-        nsignal = dsvars[2]
+        window = dsvars["window"]
+        decomplen = dsvars["decomplen"]
+        bclen = dsvars["bclen"]
+        nsignal = dsvars["nsignal"]
 
         if self.convolution_filter is None:
-            self.convolution_filter = ConvolutionFilter(adim=window, length=3)
+            self.convolution_filter = ConvolutionFilter(adim=decomplen, length=5)
         elif self.convolution_filter.adim != window:
-            self.convolution_filter = ConvolutionFilter(adim=window, length=3)
+            self.convolution_filter = ConvolutionFilter(adim=decomplen, length=5)
 
-        inp_idx = np.arange(0, window)
+        decomp_idx = np.arange(0, decomplen)
         out_idx = np.arange(0, self.out_len + bclen)
 
-        inp_idx_bc = np.arange(0, window - bclen)
+        inp_idx_bc = decomp_idx[-window:] - bclen
         out_idx_bc = np.arange(bclen, self.out_len + bclen)
         y_idx_bc = np.arange(0, self.out_len)
 
@@ -112,16 +115,16 @@ class OptEWTForecast:
         list_lsq = []
 
         for i, idx_i in enumerate(self.np_idx_inc_eval):
-            inp_idx_i = inp_idx + (idx_i - window)
+            decomp_idx_i = decomp_idx + (idx_i - decomplen)
             out_idx_i = out_idx + idx_i
             out_len_i = bclen + self.out_len
 
-            np_x_i = self.np_data_rs[inp_idx_i]
+            np_x_i = self.np_data_rs[decomp_idx_i]
             np_x_ft_i = self.convolution_filter(np_x_i)
             np_y_i = self.np_data_rs[out_idx_i][y_idx_bc]
 
             if self.plot_flag:
-                full_idx_i = np.concatenate((inp_idx_i[-self.plt_len:], out_idx_i[y_idx_bc]))
+                full_idx_i = np.concatenate((decomp_idx_i[-self.plt_len:], out_idx_i[y_idx_bc]))
                 local_plot_path_i = (local_plot_path / f"trial_{i}").resolve()
 
                 if not local_plot_path_i.is_dir():
@@ -138,34 +141,35 @@ class OptEWTForecast:
 
             select_ewt_i = np.arange(0, ewt_comps_i.shape[0])
             for k in select_ewt_i:
-                np_ewt_signal_x_k = ewt_comps_i[k, :]
-                quantiles_y_k, mean_y_k = self.forecast_model.forecast(np_ewt_signal_x_k[inp_idx_bc],
+                np_ewt_signal_x_k = ewt_comps_i[k, inp_idx_bc]
+                quantiles_y_k, mean_y_k = self.forecast_model.forecast(np_ewt_signal_x_k,
                                                      prediction_length=out_len_i,
                                                      output_type="numpy",
                                                      )
 
-
-                list_quantiles_i.append(quantiles_y_k[0][out_idx_bc])
-                list_mean_i.append(mean_y_k[0][out_idx_bc])
+                list_quantiles_i.append(quantiles_y_k[0])
+                list_mean_i.append(mean_y_k[0])
 
                 if self.plot_flag:
                     plot_fc(np_ewt_signal_x_k[-self.plt_len:], quantiles_y_k[0][out_idx_bc],
+                            bcs=mean_y_k[0][:bclen],
                             save_path=f'{local_plot_path_i}/ewt_signal_{k}_pred.png')
 
-            ewt_quantiles_i = np.asarray(list_quantiles_i).sum(axis=0)
-            ewt_mean_i = np.asarray(list_mean_i).sum(axis=0)
+            np_ewt_quantiles_i = np.asarray(list_quantiles_i).sum(axis=0)
+            np_ewt_mean_i = np.asarray(list_mean_i).sum(axis=0)
 
             list_y_ref.append(np_y_i)
-            list_y_prd.append(ewt_mean_i)
+            list_y_prd.append(np_ewt_mean_i[out_idx_bc])
 
-            np_diff_i = (np_y_i - np_y_i[0]) - (ewt_mean_i - ewt_mean_i[0])
+            np_diff_i = (np_y_i - np_y_i[0]) - (np_ewt_mean_i[out_idx_bc] - np_ewt_mean_i[out_idx_bc][0])
             list_lsq.append(np.dot(np_diff_i, np_diff_i))
 
             if self.plot_flag:
-                plot_fc(np_x_i[-self.plt_len:], ewt_quantiles_i,
+                plot_fc(np_x_i[-self.plt_len:], np_ewt_quantiles_i[out_idx_bc, :],
+                        bcs=np_ewt_mean_i[:bclen],
                         real_future_values=np_y_i,
                         full_timeseries=self.np_data_rs[full_idx_i],
-                        title=f"End Time: {self.df_data.index[inp_idx_i][-1]}",
+                        title=f"End Time: {self.df_data.index[decomp_idx_i][-1]}",
                         save_path=f'{local_plot_path_i}/ewt_signal_sum_pred.png')
 
         np_lsq = np.asarray(list_lsq)
@@ -178,48 +182,72 @@ class OptEWTForecast:
             print(f"Error loading model: {e}")
             return
 
+def get_design_sample(seed: int = 42) -> np.ndarray:
+
+    # Create a sample variables
+    np_window = np.arange(100, 2000, step=100)
+    np_decomplen = np.arange(100, 3000, step=100)
+    np_bclen = np.arange(0, 10)
+    np_nsignal = np.arange(4, 15)
+
+    list_window = []
+    list_decomplen = []
+    list_bclen = []
+    list_nsignal = []
+
+    for win_i in np_window:
+        for decomplen_i in np_decomplen:
+            if decomplen_i >= win_i:
+                for bclen_i in np_bclen:
+                    for nsignal_i in np_nsignal:
+                        list_window.append(win_i)
+                        list_decomplen.append(decomplen_i)
+                        list_bclen.append(bclen_i)
+                        list_nsignal.append(nsignal_i)
+
+    dict_dsvars = dict(window=list_window, decomplen=list_decomplen, bclen=list_bclen, nsignal=list_nsignal)
+    np_dsvars_idx = np.arange(len(list_window))
+
+    pd_dsvars = pd.DataFrame(dict_dsvars, index=np_dsvars_idx.copy())
+
+    np.random.seed(seed)
+    np.random.shuffle(np_dsvars_idx)
+
+    return pd_dsvars.iloc[np_dsvars_idx, :]
 
 def main():
 
     input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
     dict_price_data = load(input_data_path)
+    dt = 15
 
-    opt_ewt_forecst = OptEWTForecast(input_data=dict_price_data[15],
+    opt_ewt_forecst = OptEWTForecast(input_data=dict_price_data[dt],
                                      out_len=12,
                                      plt_len=120,
                                      # plot_flag=True,
                                      )
 
     # Create a sample variables
-    np_window = np.arange(100, 2000, step=100)
-    np_bclen = np.arange(0, 10)
-    np_nsignal = np.arange(4, 15)
+    pd_dsvars = get_design_sample()
 
-    list_dsvars = []
-    for win_i in np_window:
-        for bclen_i in np_bclen:
-            for nsignal_i in np_nsignal:
-                list_dsvars.append((win_i, bclen_i, nsignal_i))
+    # Convert timestamp to a datetime object
+    dt_object = datetime.datetime.fromtimestamp(time.time())
 
-    np_dsvars = np.array(list_dsvars)
-    np_dsvars_idx = np.arange(len(np_dsvars))
+    # Format the datetime object into a string suitable for a filename.
+    timestamp_str = dt_object.strftime("%Y%m%d_%H%M%S")     # YYYYMMDD_HHMMSS is a good format for chronological sorting.
+    opt_file_info = (project_local_path / f"opt_ifo_dt{dt}_{timestamp_str}.csv").resolve()
 
-    np.random.seed(42)
-    np.random.shuffle(np_dsvars_idx)
+    list_output = []
+    for i, row_i in enumerate(pd_dsvars.iterrows()):
+        lsq_i = opt_ewt_forecst.objective(row_i[1])
 
-    dict_output = {"dsvars": [], "lsq": []}
-    opt_file_info = (project_local_path / "opt_ifo.csv").resolve()
+        input_i = row_i[1].to_dict()
+        input_i["lsq"] = lsq_i
+        list_output.append(input_i)
 
-    for i, idx_i in enumerate(np_dsvars_idx):
-        lsq_i = opt_ewt_forecst.objective(np_dsvars[idx_i])
-
-        dict_output["dsvars"].append(np_dsvars[idx_i])
-        dict_output["lsq"].append(lsq_i)
-
-        print(f"Processing DSVARS: {np_dsvars[idx_i]}, LSQ Value: {lsq_i}")
-
-        if i % 10 == 0:
-            df_opt_info = pd.DataFrame(dict_output)
+        print(f" >>> Iter.: {i}, Processing DSVARS: {row_i[1]}, LSQ Value: {lsq_i}")
+        if i % 10 == 0 and i > 0:
+            df_opt_info = pd.DataFrame(list_output)
             df_opt_info.to_csv(opt_file_info, index=False)
 
 

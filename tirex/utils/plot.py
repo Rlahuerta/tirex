@@ -11,6 +11,7 @@ def plot_fc(ctx,
             quantile_fc: np.ndarray,
             full_timeseries: np.ndarray = None,
             real_future_values: np.ndarray = None,
+            bcs: np.ndarray = None,
             title: str = None,
             save_path=None,
             ):
@@ -20,8 +21,10 @@ def plot_fc(ctx,
     Args:
         ctx (array-like): The historical context data.
         quantile_fc (array-like): The quantile forecast data, expected to have 9 quantiles.
+        full_timeseries (array-like, optional):
         real_future_values (array-like, optional): The ground truth future values. Defaults to None.
-        title
+        bcs (array-like, optional):
+        title (str, optional):
         save_path (str, optional): If provided, the plot will be saved to this path instead of being displayed.
                                    Defaults to None.
     """
@@ -29,10 +32,19 @@ def plot_fc(ctx,
     lower_bound = quantile_fc[:, 0]
     upper_bound = quantile_fc[:, 8]
 
-    np_x = np.arange(0, len(ctx) + len(median_forecast))
+    if bcs is None:
+        np_x = np.arange(0, ctx.size + median_forecast.size)
+        bcs_x = np.array([])
+        forecast_x = np_x[ctx.size:]
+        real_x = np_x[ctx.size:]
+    else:
+        np_x = np.arange(0, ctx.size + median_forecast.size + bcs.size)
+        bcs_x = np_x[ctx.size:][:bcs.size]
+        forecast_x = np_x[ctx.size + bcs.size:]
+        real_x = forecast_x - bcs.size
+        np_x = np_x[:-bcs.size]
 
-    original_x = np_x[:len(ctx)]
-    forecast_x = np_x[len(ctx):]
+    original_x = np_x[:ctx.size]
 
     # Plotting
     plt.figure(figsize=(12, 6))
@@ -41,16 +53,20 @@ def plot_fc(ctx,
         plt.title(title)
 
     plt.plot(original_x, ctx, label="Ground Truth Context", color="#4a90d9")
-    if real_future_values is not None:
-        plt.plot(forecast_x, real_future_values, label="Ground Truth Future", color="#4a90d9", linestyle=":")
-
-    if full_timeseries is not None:
-        plt.plot(np_x, full_timeseries, color="grey", alpha=0.5, linestyle=":")
-
     plt.plot(forecast_x, median_forecast, label="Forecast (Median)", color="#d94e4e", linestyle="--")
     plt.fill_between(
         forecast_x, lower_bound, upper_bound, color="#d94e4e", alpha=0.1, label="Forecast 10% - 90% Quantiles"
     )
+
+    if real_future_values is not None:
+        plt.plot(real_x, real_future_values, label="Ground Truth Future", color="#4a90d9", linestyle=":")
+
+    if full_timeseries is not None:
+        plt.plot(np_x, full_timeseries, color="grey", alpha=0.5, linestyle=":")
+
+    if bcs_x.size > 0:
+        plt.plot(bcs_x, bcs, color="red", label="boundary")
+        plt.plot(bcs_x, bcs, ".", color="black")
 
     plt.xlim(left=0)
     plt.legend()
