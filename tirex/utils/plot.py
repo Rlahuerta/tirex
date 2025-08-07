@@ -1,17 +1,19 @@
 import numpy as np
+import pandas as pd
+import matplotlib.dates as mdates
+
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 from matplotlib import pyplot as plt
 from scipy.signal import hilbert
-from sympy.abc import alpha
-
 from tirex.utils.ceemdan import filt6, pade6
 
 
-def plot_fc(ctx,
-            quantile_fc: np.ndarray,
-            full_timeseries: np.ndarray = None,
-            real_future_values: np.ndarray = None,
-            bcs: np.ndarray = None,
+def plot_fc(ctx: pd.Series,
+            quantile_fc: pd.DataFrame,
+            full_timeseries: pd.Series = None,
+            real_future_values: pd.Series = None,
+            decomp_sum: pd.Series = None,
+            bcs: pd.Series = None,
             title: str = None,
             save_path=None,
             ):
@@ -23,57 +25,63 @@ def plot_fc(ctx,
         quantile_fc (array-like): The quantile forecast data, expected to have 9 quantiles.
         full_timeseries (array-like, optional):
         real_future_values (array-like, optional): The ground truth future values. Defaults to None.
+        decomp_sum (array-like, optional):
         bcs (array-like, optional):
         title (str, optional):
         save_path (str, optional): If provided, the plot will be saved to this path instead of being displayed.
                                    Defaults to None.
     """
-    median_forecast = quantile_fc[:, 4]
-    lower_bound = quantile_fc[:, 0]
-    upper_bound = quantile_fc[:, 8]
-
-    if bcs is None:
-        np_x = np.arange(0, ctx.size + median_forecast.size)
-        bcs_x = np.array([])
-        forecast_x = np_x[ctx.size:]
-        real_x = np_x[ctx.size:]
-    else:
-        np_x = np.arange(0, ctx.size + median_forecast.size + bcs.size)
-        bcs_x = np_x[ctx.size:][:bcs.size]
-        forecast_x = np_x[ctx.size + bcs.size:]
-        real_x = forecast_x - bcs.size
-        np_x = np_x[:-bcs.size]
-
-    original_x = np_x[:ctx.size]
+    median_forecast = quantile_fc.iloc[:, 4]
+    lower_bound = quantile_fc.iloc[:, 0]
+    upper_bound = quantile_fc.iloc[:, 8]
 
     # Plotting
-    plt.figure(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(12, 6), dpi=300)
 
     if title is not None:
-        plt.title(title)
+        fig.suptitle(title)
 
-    plt.plot(original_x, ctx, label="Ground Truth Context", color="#4a90d9")
-    plt.plot(forecast_x, median_forecast, label="Forecast (Median)", color="#d94e4e", linestyle="--")
-    plt.fill_between(
-        forecast_x, lower_bound, upper_bound, color="#d94e4e", alpha=0.1, label="Forecast 10% - 90% Quantiles"
+    ax.plot(ctx.index, ctx.values, label="Ground Truth Context", color="#4a90d9")
+    ax.plot(median_forecast.index, median_forecast.values,
+             label="Forecast (Median)", color="#d94e4e", linestyle="--")
+
+    ax.fill_between(
+        median_forecast.index, lower_bound.values, upper_bound.values,
+        color="#d94e4e", alpha=0.1, label="Forecast 10% - 90% Quantiles"
     )
 
     if real_future_values is not None:
-        plt.plot(real_x, real_future_values, label="Ground Truth Future", color="#4a90d9", linestyle=":")
+        ax.plot(real_future_values.index, real_future_values.values,
+                 label="Ground Truth Future", color="#4a90d9", linestyle=":")
+
+    if decomp_sum is not None:
+        ax.plot(decomp_sum.index, decomp_sum.values, label="EWT SUM", color="grey", alpha=0.5, linestyle=":")
 
     if full_timeseries is not None:
-        plt.plot(np_x, full_timeseries, color="grey", alpha=0.5, linestyle=":")
+        ax.plot(full_timeseries.index, full_timeseries.values, color="grey", alpha=0.5, linestyle=":")
 
-    if bcs_x.size > 0:
-        plt.plot(bcs_x, bcs, color="red", label="boundary")
-        plt.plot(bcs_x, bcs, ".", color="black")
+    if bcs is not None:
+        ax.plot(bcs.index, bcs.values, alpha=0.5, color="red", label="boundary")
+        ax.plot(bcs.index, bcs.values, ".", color="black")
 
-    plt.xlim(left=0)
-    plt.legend()
-    plt.grid(True)
+    # Formatting the x-axis as dates
+    ax.xaxis_date()
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %H:%M'))
+    ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+    ax.xaxis.set_minor_locator(mdates.HourLocator(interval=4))
+
+    plt.setp(ax.get_xticklabels(), rotation=45)
+
+    ax.legend()
+    ax.set_xlabel(f"Date - {ctx.index[0].strftime('%B')}/{ctx.index[0].year}")
+    ax.set_ylabel('Price')
+
+    ax.grid(which='minor', alpha=0.2, axis='x')
+    ax.grid(which='minor', alpha=0.2)
+    ax.grid(which='major', alpha=0.5)
 
     if save_path:
-        plt.savefig(save_path)
+        fig.savefig(save_path)
         plt.close()
     else:
         plt.show()
@@ -351,3 +359,125 @@ def save_plot(x: np.ndarray, y_original: np.ndarray, y_filtered: np.ndarray, tit
 
     fig.savefig(file_path)
     plt.close()
+
+
+def _add_candlestick(ax, tickers: pd.DataFrame, dt: int = None):
+
+    if dt is None or dt == 60:
+        width, width2 = 0.04, 0.01
+    elif dt == 15:
+        width, width2 = 0.01, 0.002
+    else:
+        raise NotImplementedError
+
+    up = tickers[tickers['close'] >= tickers['open']]
+    down = tickers[tickers['close'] < tickers['open']]
+
+    col1, col2 = 'red', 'green'
+
+    ax.bar(up.index, up.close - up.open, width, bottom=up.open, color=col2)
+    ax.bar(up.index, up.high - up.close, width2, bottom=up.close, color=col2)
+    ax.bar(up.index, up.low - up.open, width2, bottom=up.open, color=col2)
+
+    ax.bar(down.index, down.close - down.open, width, bottom=down.open, color=col1)
+    ax.bar(down.index, down.high - down.open, width2, bottom=down.open, color=col1)
+    ax.bar(down.index, down.low - down.close, width2, bottom=down.close, color=col1)
+
+
+def plot_mpl_ticker(tickers_trn_data: pd.DataFrame,
+                    tickers_tst_data: pd.DataFrame = None,
+                    plot_name: str = None,
+                    close: bool = False,
+                    dpi: int = 800,
+                    ):
+
+    # Assuming `tickers_data` is indexed by date and contains open, high, low, close columns
+    fig, ax = plt.subplots(figsize=(24, 8))
+    fig.suptitle('Asset Price and Overlays', fontsize=12)
+
+    time_increment = int(tickers_trn_data.index.to_series().diff().mean().total_seconds() / 60)
+
+    # Plotting candlesticks
+    _add_candlestick(ax, tickers_trn_data, dt=time_increment)
+
+    if 'ewt' in tickers_trn_data.keys():
+        ax.plot(tickers_trn_data.index, tickers_trn_data['ewt'], color='orange', label='EWT', linewidth=1.)
+
+    if 'filter' in tickers_trn_data.keys():
+        ax.plot(tickers_trn_data.index, tickers_trn_data['filter'], color='green', label='Convolve Filter', linewidth=1.)
+
+    if 'trn' in tickers_trn_data.keys():
+        ax.plot(tickers_trn_data.index, tickers_trn_data['trn'], color='blue', label='Training', linewidth=1.)
+
+    if 'filter_upp' in tickers_trn_data.keys() and 'filter_lwr' in tickers_trn_data.keys():
+        ax.fill_between(tickers_trn_data.index,
+                        tickers_trn_data['filter_lwr'],
+                        tickers_trn_data['filter_upp'],
+                        interpolate=True,
+                        alpha=0.3)
+
+
+    if isinstance(tickers_tst_data, pd.DataFrame):
+        _add_candlestick(ax, tickers_tst_data[['open', 'close', 'high', 'low']], dt=time_increment)
+
+        if 'Prediction' in tickers_tst_data.keys():
+            ax.plot(tickers_tst_data.index, tickers_tst_data['Prediction'], color='blue', label='Pred',
+                    linewidth=1, linestyle="-.")
+
+        if 'Mean' in tickers_tst_data.keys():
+            ax.plot(tickers_tst_data.index, tickers_tst_data['Mean'], color='green', label='Pred-Mean',
+                    linewidth=2, linestyle="-.")
+
+        # if 'Mode' in tickers_tst_data.keys():
+        #     ax.plot(tickers_tst_data.index, tickers_tst_data['Mode'], color='green', label='Pred-Mode',
+        #             linewidth=2, linestyle="-.")
+
+        if 'poly2' in tickers_tst_data.keys():
+            ax.plot(tickers_tst_data.index, tickers_tst_data['poly2'], color='purple', label='Reg-Poly2',
+                    linewidth=2, linestyle="-.")
+
+        if 'Reference' in tickers_tst_data.keys():
+            ax.plot(tickers_tst_data.index, tickers_tst_data['Reference'], color='red', label='Reference',
+                    linewidth=2, linestyle="-.")
+
+        if 'q05' in tickers_tst_data.keys() and 'q95' in tickers_tst_data.keys():
+            ax.fill_between(tickers_tst_data.index,
+                            tickers_tst_data['q05'],
+                            tickers_tst_data['q95'],
+                            interpolate=True,
+                            alpha=0.3)
+
+    # Formatting the x-axis as dates
+    ax.xaxis_date()
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %H:%M'))
+
+    if time_increment == 60:
+        ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+        ax.xaxis.set_minor_locator(mdates.HourLocator(interval=4))
+    elif time_increment == 15:
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=6))
+        ax.xaxis.set_minor_locator(mdates.HourLocator(interval=1))
+    else:
+        raise NotImplementedError
+
+    plt.setp(ax.get_xticklabels(), rotation=45)
+
+    # Titles and labels
+    ax.set_xlabel(f"Date - {tickers_tst_data.index[0].strftime('%B')}/{tickers_tst_data.index[0].year}")
+    ax.set_ylabel('Price')
+
+    ax.grid(which='minor', alpha=0.2, axis='x')
+    ax.grid(which='minor', alpha=0.2)
+    ax.grid(which='major', alpha=0.5)
+
+    # Legend
+    plt.legend()
+    # plt.show()
+
+    if plot_name is not None:
+        fig.savefig(plot_name, dpi=dpi)
+
+    if close:
+        plt.close(fig)
+    else:
+        return fig, ax

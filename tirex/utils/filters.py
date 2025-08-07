@@ -72,7 +72,7 @@ class ConvolutionFilter:
         :return: The filtered data as a NumPy array.
         """
 
-        assert (self.adim == data.shape[0]), 'Array dim is wrong!'
+        assert (self.adim == data.shape[0]), f'Array dim is wrong! {self.adim} != {data.shape[0]}'
 
         np_data_ou = np.zeros(self.adim, dtype=float)
 

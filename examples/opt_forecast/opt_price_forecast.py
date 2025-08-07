@@ -2,12 +2,13 @@
 from pathlib import Path
 import time
 import datetime
+import warnings
 import numpy as np
 import pandas as pd
 
 from joblib import dump, load
 from sklearn.preprocessing import MinMaxScaler
-from scipy.optimize import milp
+from typing import Tuple, Dict, Any, Optional, Union, Callable
 
 from tirex import ForecastModel, load_model
 from tirex.utils.filters import ConvolutionFilter
@@ -49,6 +50,7 @@ class OptEWTForecast:
                  plt_len: int = 120,
                  inc_len: int = 500,
                  plot_flag: bool = False,
+                 debug: bool = False,
                  **kwargs,
                  ):
 
@@ -57,9 +59,12 @@ class OptEWTForecast:
         self.plt_len = plt_len
         self.inc_len = inc_len
         self.plot_flag = plot_flag
+        self._plot_local_path = None
+        self._debug = debug
 
         self.ewt = EmpiricalWaveletTransform()
-        self.forecast_model = None
+        self._model = None
+        self._forecast = None
 
         # Optimization Variables
         self.dsvars = ['window', 'bclen', 'nsignal']
@@ -67,9 +72,11 @@ class OptEWTForecast:
         self.dsvars_bounds = [(80, 2000), (0, 10), (4, 15)]
 
         self.df_data = input_data["close"]
-        self.np_data_idx = np.arange(len(self.df_data))
         self.scaler_data = MinMaxScaler(feature_range=(0., 100.))
-        self.np_data_rs = self.scaler_data.fit_transform(self.df_data.values.reshape(-1, 1)).flatten()
+
+        self.np_data_idx = np.arange(len(self.df_data))
+        self.sr_data_rs = None
+
         self.convolution_filter = None
 
         self.np_idx_inc_eval = np.array([])
@@ -91,6 +98,108 @@ class OptEWTForecast:
 
         self.np_idx_inc_eval = np.array(list_incs, dtype=int)
 
+        np_data_rs = self.scaler_data.fit_transform(self.df_data.values.reshape(-1, 1)).flatten()
+        self.sr_data_rs = pd.Series(np_data_rs, index=self.input_data.index)
+
+    @staticmethod
+    def _mock_forecast_model(input_x: np.ndarray,
+                             prediction_length: int = 10,
+                             **kwargs,
+                             ) -> np.ndarray:
+
+        x = np.linspace(0., 300., prediction_length)
+        y_base = np.sin(x / 2.)
+
+        list_quantiles = []
+        np_noise = np.linspace(0.01, 0.2, 9)
+
+        for noise_i in np_noise:
+            y_main_i = 5. * noise_i * np.cumsum(np.random.random(prediction_length) - 0.5)
+            y_noisy_i = y_base + y_main_i
+            y_noisy_i += 1.1 * (np.abs(y_noisy_i)).max()
+            y_noisy_i /= (np.abs(y_noisy_i)).max()
+            y_noisy_i *= input_x.mean()
+            y_noisy_i -= y_noisy_i[-1]
+            y_noisy_i += input_x[-1]
+
+            list_quantiles.append(y_noisy_i)
+
+        np_quantiles = np.array([list_quantiles])
+        np_mean = np_quantiles.mean(axis=1)
+
+        return np_quantiles, np_mean
+
+    def _load_forecast_model(self):
+        try:
+            if not self._debug:
+                self._model: ForecastModel = load_model("NX-AI/TiRex")
+                self._forecast = self._model.forecast
+            else:
+                self._forecast = self._mock_forecast_model
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            return
+
+    def _signal_decomposition(self,
+                              input_signal: pd.Series,
+                              nsignal: int,
+                              ) -> pd.DataFrame:
+        # TODO: Add option to use ceemdan as signal decomp method
+        assert nsignal > 1, "nsignal should be greater than 1"
+
+        # First EWT Decomposition
+        np_ewt_res, np_mwvlt, np_bcs = self.ewt(input_signal.values, nsignal)
+        pd_ewt_res = pd.DataFrame(np_ewt_res[-input_signal.size:], index=input_signal.index)
+
+        return pd_ewt_res
+
+    def _forecast_signal(self,
+                         decomp_signals: pd.DataFrame,
+                         bclen: int,
+                         plot_path: Optional[Path] = None,
+                         ) -> pd.DataFrame:
+
+        np_index = np.arange(0, decomp_signals.shape[0] + self.out_len)
+        np_input_idx = np_index[:decomp_signals.shape[0] - bclen]
+        np_output_idx = np_index[decomp_signals.shape[0] - bclen:]
+        dt_time = decomp_signals.index[1] - decomp_signals.index[0]
+
+        list_output_datetime_idx = []
+        dt_current = decomp_signals.index[np_input_idx][-1]
+        for i in range(np_output_idx.size):
+            dt_current += dt_time
+            list_output_datetime_idx.append(dt_current)
+
+        list_quantiles = []
+        list_mean = []
+
+        for k, (signal_id_k, sr_signal_val_k) in enumerate(decomp_signals.items()):
+            sr_signal_x_k = sr_signal_val_k.iloc[np_input_idx]
+            np_quantiles_y_k, np_mean_y_k = self._forecast(sr_signal_x_k.values,
+                                                     prediction_length=self.out_len + bclen,
+                                                     output_type="numpy",
+                                                     )
+
+            pd_quantiles_y_k = pd.DataFrame(np_quantiles_y_k[0], index=list_output_datetime_idx)
+            pd_mean_y_k = pd.Series(np_mean_y_k[0], index=list_output_datetime_idx)
+
+            list_quantiles.append(pd_quantiles_y_k)
+            list_mean.append(pd_mean_y_k)
+
+            if self.plot_flag and plot_path is not None:
+                plt_kwargs = dict(save_path=f'{plot_path}/ewt_signal_{k}_pred.png')
+                if bclen > 0:
+                    plt_kwargs["bcs"] = pd_mean_y_k.iloc[:bclen]
+
+                plot_fc(sr_signal_val_k.iloc[-self.plt_len:],
+                        pd_quantiles_y_k.iloc[bclen:, :], **plt_kwargs)
+
+        pd_quantiles = sum(list_quantiles)
+        sr_mean = sum(list_mean)
+        sr_mean.name = "mean"
+
+        return pd.concat([pd_quantiles, sr_mean], axis=1)
+
     def objective(self, dsvars: pd.Series) -> float:
 
         window = dsvars["window"]
@@ -98,17 +207,18 @@ class OptEWTForecast:
         bclen = dsvars["bclen"]
         nsignal = dsvars["nsignal"]
 
+        assert window > 50, f"window should be greater than 50, window is {window}"
+        assert decomplen >= window, f"decomplen should be greater or equal than window, decomplen is {decomplen}"
+        assert bclen >= 0, f"bclen should be greater or equal than 0, bclen is {bclen}"
+        assert nsignal > 3, f"nsignal should be greater than 3, nsignal is {nsignal}"
+
         if self.convolution_filter is None:
-            self.convolution_filter = ConvolutionFilter(adim=decomplen, length=5)
-        elif self.convolution_filter.adim != window:
-            self.convolution_filter = ConvolutionFilter(adim=decomplen, length=5)
+            self.convolution_filter = ConvolutionFilter(adim=decomplen + bclen, length=5)
+        elif self.convolution_filter.adim != decomplen:
+            self.convolution_filter = ConvolutionFilter(adim=decomplen + bclen, length=5)
 
-        decomp_idx = np.arange(0, decomplen)
-        out_idx = np.arange(0, self.out_len + bclen)
-
-        inp_idx_bc = decomp_idx[-window:] - bclen
-        out_idx_bc = np.arange(bclen, self.out_len + bclen)
-        y_idx_bc = np.arange(0, self.out_len)
+        local_plot_path_i = Path()
+        decomp_idx = np.arange(0, decomplen + bclen)
 
         list_y_ref = []
         list_y_prd = []
@@ -116,71 +226,47 @@ class OptEWTForecast:
 
         for i, idx_i in enumerate(self.np_idx_inc_eval):
             decomp_idx_i = decomp_idx + (idx_i - decomplen)
-            out_idx_i = out_idx + idx_i
-            out_len_i = bclen + self.out_len
+            sr_data_rs_i = self.sr_data_rs.iloc[decomp_idx_i]
 
-            np_x_i = self.np_data_rs[decomp_idx_i]
-            np_x_ft_i = self.convolution_filter(np_x_i)
-            np_y_i = self.np_data_rs[out_idx_i][y_idx_bc]
+            if self.convolution_filter.adim == sr_data_rs_i.size:
+                sr_x_ft_i = pd.Series(self.convolution_filter(sr_data_rs_i.values), index=sr_data_rs_i.index)
+            else:
+                warnings.warn(f"Problem with convolution filter, dimension error: {self.convolution_filter.adim} != {sr_data_rs_i.size}")
+                sr_x_ft_i = sr_data_rs_i.copy()
 
             if self.plot_flag:
-                full_idx_i = np.concatenate((decomp_idx_i[-self.plt_len:], out_idx_i[y_idx_bc]))
                 local_plot_path_i = (local_plot_path / f"trial_{i}").resolve()
-
                 if not local_plot_path_i.is_dir():
                     local_plot_path_i.mkdir(exist_ok=True)
                 else:
                     cleanup_directory(local_plot_path_i)
 
             # First EWT Decomposition
-            ewt_res_i, np_mwvlt_i, np_bcs_i = self.ewt(np_x_ft_i, nsignal)
-            ewt_comps_i = ewt_res_i.T
+            pd_ewt_comps_i = self._signal_decomposition(sr_x_ft_i, nsignal)
+            pd_forecast_i = self._forecast_signal(pd_ewt_comps_i, bclen, local_plot_path_i)
 
-            list_quantiles_i = []
-            list_mean_i = []
+            sr_y_i = self.sr_data_rs[pd_forecast_i.index[bclen:]]
+            sr_y_prd_i = pd_forecast_i["mean"][bclen:]
 
-            select_ewt_i = np.arange(0, ewt_comps_i.shape[0])
-            for k in select_ewt_i:
-                np_ewt_signal_x_k = ewt_comps_i[k, inp_idx_bc]
-                quantiles_y_k, mean_y_k = self.forecast_model.forecast(np_ewt_signal_x_k,
-                                                     prediction_length=out_len_i,
-                                                     output_type="numpy",
-                                                     )
+            list_y_ref.append(sr_y_i)
+            list_y_prd.append(sr_y_prd_i)
 
-                list_quantiles_i.append(quantiles_y_k[0])
-                list_mean_i.append(mean_y_k[0])
-
-                if self.plot_flag:
-                    plot_fc(np_ewt_signal_x_k[-self.plt_len:], quantiles_y_k[0][out_idx_bc],
-                            bcs=mean_y_k[0][:bclen],
-                            save_path=f'{local_plot_path_i}/ewt_signal_{k}_pred.png')
-
-            np_ewt_quantiles_i = np.asarray(list_quantiles_i).sum(axis=0)
-            np_ewt_mean_i = np.asarray(list_mean_i).sum(axis=0)
-
-            list_y_ref.append(np_y_i)
-            list_y_prd.append(np_ewt_mean_i[out_idx_bc])
-
-            np_diff_i = (np_y_i - np_y_i[0]) - (np_ewt_mean_i[out_idx_bc] - np_ewt_mean_i[out_idx_bc][0])
+            np_diff_i = (sr_y_i.values - sr_y_i.values[0]) - (sr_y_prd_i.values - sr_y_prd_i.values[0])
             list_lsq.append(np.dot(np_diff_i, np_diff_i))
 
             if self.plot_flag:
-                plot_fc(np_x_i[-self.plt_len:], np_ewt_quantiles_i[out_idx_bc, :],
-                        bcs=np_ewt_mean_i[:bclen],
-                        real_future_values=np_y_i,
-                        full_timeseries=self.np_data_rs[full_idx_i],
-                        title=f"End Time: {self.df_data.index[decomp_idx_i][-1]}",
+                sr_y_ewt_sum_i = pd_ewt_comps_i.iloc[bclen:, :-1].sum(axis=1)
+
+                plot_fc(sr_x_ft_i[-self.plt_len:], pd_forecast_i.iloc[bclen:, :-1],
+                        bcs=pd_forecast_i["mean"][:bclen],
+                        real_future_values=sr_y_i,
+                        decomp_sum=sr_y_ewt_sum_i,
+                        title=f"End Time: {sr_x_ft_i[-1]}",
                         save_path=f'{local_plot_path_i}/ewt_signal_sum_pred.png')
 
         np_lsq = np.asarray(list_lsq)
         return np_lsq.sum().item()
 
-    def _load_forecast_model(self):
-        try:
-            self.forecast_model: ForecastModel = load_model("NX-AI/TiRex")
-        except Exception as e:
-            print(f"Error loading model: {e}")
-            return
 
 def get_design_sample(seed: int = 42) -> np.ndarray:
 
@@ -219,12 +305,17 @@ def main():
 
     input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
     dict_price_data = load(input_data_path)
-    dt = 15
+    # dt = 15
+    # out_len = 12
+
+    dt = 60
+    out_len = 8
 
     opt_ewt_forecst = OptEWTForecast(input_data=dict_price_data[dt],
-                                     out_len=12,
+                                     out_len=out_len,
                                      plt_len=120,
-                                     # plot_flag=True,
+                                     plot_flag=True,
+                                     # debug=True,
                                      )
 
     # Create a sample variables
@@ -235,7 +326,7 @@ def main():
 
     # Format the datetime object into a string suitable for a filename.
     timestamp_str = dt_object.strftime("%Y%m%d_%H%M%S")     # YYYYMMDD_HHMMSS is a good format for chronological sorting.
-    opt_file_info = (project_local_path / f"opt_ifo_dt{dt}_{timestamp_str}.csv").resolve()
+    opt_file_info = (project_local_path / f"opt_ifo_dt_{dt}_forlen_{out_len}_{timestamp_str}.csv").resolve()
 
     list_output = []
     for i, row_i in enumerate(pd_dsvars.iterrows()):
@@ -245,7 +336,7 @@ def main():
         input_i["lsq"] = lsq_i
         list_output.append(input_i)
 
-        print(f" >>> Iter.: {i}, Processing DSVARS: {row_i[1]}, LSQ Value: {lsq_i}")
+        print(f" >>> Iter.: {i}, Processing DSVARS: {row_i[1].to_dict()}, LSQ Value: {lsq_i}")
         if i % 10 == 0 and i > 0:
             df_opt_info = pd.DataFrame(list_output)
             df_opt_info.to_csv(opt_file_info, index=False)
