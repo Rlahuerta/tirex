@@ -68,6 +68,8 @@ class OptEWTForecast:
 
         self.plot_flag = plot_flag
         self._plot_local_path = None
+
+        # FIXME
         self._debug = debug
 
         self.dtype = dtype
@@ -170,6 +172,16 @@ class OptEWTForecast:
 
             return pd_ewt_res
 
+        elif self.dtype == "xwt":
+            np_ewt_res, np_mwvlt, np_bcs = self.ewt(input_signal.values, nsignal)
+            np_ewt_res_fix = np_ewt_res[-input_signal.size:]
+            np_ewt_sum = np_ewt_res_fix.sum(axis=1)
+            np_sign_res = (input_signal.values - np_ewt_sum).reshape(-1, 1)
+            np_xwt = np.concatenate((np_ewt_res_fix, np_sign_res), axis=1)
+            pd_ewt_res = pd.DataFrame(np_xwt, index=input_signal.index)
+
+            return pd_ewt_res
+
         elif self.dtype == "emd":
             # First EMD Decomposition
             np_emd_res = self.emd.iceemdan(input_signal.values, max_imf=nsignal)
@@ -223,7 +235,7 @@ class OptEWTForecast:
             list_mean.append(pd_mean_y_k)
 
             if self.plot_flag and plot_path is not None:
-                plt_kwargs = dict(save_path=f'{plot_path}/ewt_signal_{k}_pred.png')
+                plt_kwargs = dict(save_path=f'{plot_path}/decomp_signal_{k}_pred.png')
                 if bclen > 0:
                     plt_kwargs["bcs"] = pd_mean_y_k.iloc[:bclen]
 
@@ -309,8 +321,14 @@ class OptEWTForecast:
         np_lsq = np.asarray(list_lsq)
         np_eff_pred = np.asarray(list_eff_pred)
 
+        np_dy_prd_abs = np.abs(np.asarray(list_dy_prd))
+        np_dy_prd_idx = np_dy_prd_abs > 0.002
+        np_eff_pred_cl = np_eff_pred[np_dy_prd_idx]
+        neff_cl = (np_eff_pred_cl > 0.).sum() / np_eff_pred_cl.size
+
         return {"lsq": np_lsq,
                 "efficiency": np_eff_pred,
+                "performance": neff_cl,
                 "dy_ref": np.asarray(list_dy_ref),
                 "dy_prd": np.asarray(list_dy_prd),
                 "refence": list_y_prd,
@@ -363,7 +381,8 @@ def main():
 
     seed = 42
     # dtype = "ewt"
-    dtype = "emd"
+    dtype = "xwt"
+    # dtype = "emd"
 
     opt_ewt_forecst = OptEWTForecast(input_data=dict_price_data[dt],
                                      out_len=out_len,
@@ -372,7 +391,6 @@ def main():
                                      seed=seed,
                                      dtype=dtype,
                                      # plot_flag=True,
-                                     # debug=True,
                                      )
 
     # Create a sample variables
@@ -387,8 +405,8 @@ def main():
 
     list_output = []
     for i, row_i in enumerate(pd_dsvars.iterrows()):
-        # row_i[1]['window'] = 100
-        # row_i[1]['decomplen'] = 600
+        # row_i[1]['window'] = 300
+        # row_i[1]['decomplen'] = 800
         # row_i[1]['bclen'] = 9
         # row_i[1]['nsignal'] = 10
 
@@ -398,6 +416,7 @@ def main():
         input_i["iter"] = i
         input_i["lsq"] = res_i["lsq"].sum().item()
         input_i["efficiency"] = (res_i["efficiency"] > 0.1).sum().item() / res_i["efficiency"].size
+        input_i["performance"] = res_i["performance"]
         list_output.append(input_i)
 
         print(f" >>> Iter.: {i}, Processing DSVARS: {row_i[1].to_dict()}, LSQ Value: {input_i['lsq']}")

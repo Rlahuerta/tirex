@@ -9,7 +9,7 @@ from tirex.utils.ceemdan import filt6, pade6
 
 
 def plot_fc(ctx: pd.Series,
-            quantile_fc: pd.DataFrame,
+            quantile_fc: pd.DataFrame = None,
             full_timeseries: pd.Series = None,
             real_future_values: pd.Series = None,
             decomp_sum: pd.Series = None,
@@ -31,9 +31,6 @@ def plot_fc(ctx: pd.Series,
         save_path (str, optional): If provided, the plot will be saved to this path instead of being displayed.
                                    Defaults to None.
     """
-    median_forecast = quantile_fc.iloc[:, 4]
-    lower_bound = quantile_fc.iloc[:, 0]
-    upper_bound = quantile_fc.iloc[:, 8]
 
     # Plotting
     fig, ax = plt.subplots(figsize=(12, 6), dpi=300)
@@ -42,13 +39,19 @@ def plot_fc(ctx: pd.Series,
         fig.suptitle(title)
 
     ax.plot(ctx.index, ctx.values, label="Ground Truth Context", color="#4a90d9")
-    ax.plot(median_forecast.index, median_forecast.values,
-             label="Forecast (Median)", color="#d94e4e", linestyle="--")
 
-    ax.fill_between(
-        median_forecast.index, lower_bound.values, upper_bound.values,
-        color="#d94e4e", alpha=0.1, label="Forecast 10% - 90% Quantiles"
-    )
+    if quantile_fc is not None:
+        median_forecast = quantile_fc.iloc[:, 4]
+        lower_bound = quantile_fc.iloc[:, 0]
+        upper_bound = quantile_fc.iloc[:, 8]
+
+        ax.plot(median_forecast.index, median_forecast.values,
+                 label="Forecast (Median)", color="#d94e4e", linestyle="--")
+
+        ax.fill_between(
+            median_forecast.index, lower_bound.values, upper_bound.values,
+            color="#d94e4e", alpha=0.1, label="Forecast 10% - 90% Quantiles"
+        )
 
     if real_future_values is not None:
         ax.plot(real_future_values.index, real_future_values.values,
