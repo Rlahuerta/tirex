@@ -7,12 +7,14 @@ import numpy as np
 import pandas as pd
 
 from joblib import dump, load
+from networkx import efficiency
 from sklearn.preprocessing import MinMaxScaler
 from typing import Tuple, Dict, Any, Optional, Union, Callable
 
 from tirex import ForecastModel, load_model
 from tirex.utils.filters import ConvolutionFilter
 from tirex.utils.ewt import EmpiricalWaveletTransform
+from tirex.utils.ceemdan import ICEEMDAN
 from tirex.utils.plot import plot_fc, emd_plot
 
 # Add the project root to the Python path
@@ -49,7 +51,10 @@ class OptEWTForecast:
                  out_len: int,
                  plt_len: int = 120,
                  inc_len: int = 500,
+                 run_size: int = 50,
+                 dtype: str = "ewt",
                  plot_flag: bool = False,
+                 seed: int = 42,
                  debug: bool = False,
                  **kwargs,
                  ):
@@ -58,11 +63,20 @@ class OptEWTForecast:
         self.out_len = out_len
         self.plt_len = plt_len
         self.inc_len = inc_len
+        self.seed = seed
+        self.run_size = run_size
+
         self.plot_flag = plot_flag
         self._plot_local_path = None
         self._debug = debug
 
+        self.dtype = dtype
         self.ewt = EmpiricalWaveletTransform()
+
+        config = {"processes": 1, "spline_kind": 'akima', "DTYPE": float}
+        self.emd = ICEEMDAN(trials=20, max_imf=-1, **config)
+
+        # Forecast Model and function
         self._model = None
         self._forecast = None
 
@@ -97,6 +111,8 @@ class OptEWTForecast:
             inc_i += self.inc_len
 
         self.np_idx_inc_eval = np.array(list_incs, dtype=int)
+        np.random.seed(self.seed)
+        np.random.shuffle(self.np_idx_inc_eval)
 
         np_data_rs = self.scaler_data.fit_transform(self.df_data.values.reshape(-1, 1)).flatten()
         self.sr_data_rs = pd.Series(np_data_rs, index=self.input_data.index)
@@ -147,11 +163,31 @@ class OptEWTForecast:
         # TODO: Add option to use ceemdan as signal decomp method
         assert nsignal > 1, "nsignal should be greater than 1"
 
-        # First EWT Decomposition
-        np_ewt_res, np_mwvlt, np_bcs = self.ewt(input_signal.values, nsignal)
-        pd_ewt_res = pd.DataFrame(np_ewt_res[-input_signal.size:], index=input_signal.index)
+        if self.dtype == "ewt":
+            # First EWT Decomposition
+            np_ewt_res, np_mwvlt, np_bcs = self.ewt(input_signal.values, nsignal)
+            pd_ewt_res = pd.DataFrame(np_ewt_res[-input_signal.size:], index=input_signal.index)
 
-        return pd_ewt_res
+            return pd_ewt_res
+
+        elif self.dtype == "emd":
+            # First EMD Decomposition
+            np_emd_res = self.emd.iceemdan(input_signal.values, max_imf=nsignal)
+            pd_emd_res = pd.DataFrame(np_emd_res[:, -input_signal.size:].T, index=input_signal.index)
+
+            return pd_emd_res
+
+        else:
+            raise NotImplementedError(f"Unsupported decomposition type: {self.dtype}. Use 'ewt' or 'emd'.")
+
+    def _filter(self, input_signal: pd.Series, flen: int = 3) -> pd.Series:
+
+        if self.convolution_filter is None:
+            self.convolution_filter = ConvolutionFilter(adim=input_signal.size, length=flen)
+        elif self.convolution_filter.adim != input_signal.shape[0]:
+            self.convolution_filter = ConvolutionFilter(adim=input_signal.size, length=flen)
+
+        return pd.Series(self.convolution_filter(input_signal.values), index=input_signal.index)
 
     def _forecast_signal(self,
                          decomp_signals: pd.DataFrame,
@@ -200,7 +236,7 @@ class OptEWTForecast:
 
         return pd.concat([pd_quantiles, sr_mean], axis=1)
 
-    def objective(self, dsvars: pd.Series) -> float:
+    def objective(self, dsvars: pd.Series) -> Dict[str, np.ndarray]:
 
         window = dsvars["window"]
         decomplen = dsvars["decomplen"]
@@ -212,27 +248,24 @@ class OptEWTForecast:
         assert bclen >= 0, f"bclen should be greater or equal than 0, bclen is {bclen}"
         assert nsignal > 3, f"nsignal should be greater than 3, nsignal is {nsignal}"
 
-        if self.convolution_filter is None:
-            self.convolution_filter = ConvolutionFilter(adim=decomplen + bclen, length=5)
-        elif self.convolution_filter.adim != decomplen:
-            self.convolution_filter = ConvolutionFilter(adim=decomplen + bclen, length=5)
+        local_plot_path = (project_local_path / f"{self.dtype}_plots").resolve()
+        local_plot_path.mkdir(exist_ok=True)
+        local_plot_path_i = None
 
-        local_plot_path_i = Path()
         decomp_idx = np.arange(0, decomplen + bclen)
 
+        list_lsq = []
         list_y_ref = []
         list_y_prd = []
-        list_lsq = []
+        list_dy_ref = []
+        list_dy_prd = []
+        list_eff_pred = []
 
-        for i, idx_i in enumerate(self.np_idx_inc_eval):
+        for i, idx_i in enumerate(self.np_idx_inc_eval[:self.run_size]):
             decomp_idx_i = decomp_idx + (idx_i - decomplen)
             sr_data_rs_i = self.sr_data_rs.iloc[decomp_idx_i]
 
-            if self.convolution_filter.adim == sr_data_rs_i.size:
-                sr_x_ft_i = pd.Series(self.convolution_filter(sr_data_rs_i.values), index=sr_data_rs_i.index)
-            else:
-                warnings.warn(f"Problem with convolution filter, dimension error: {self.convolution_filter.adim} != {sr_data_rs_i.size}")
-                sr_x_ft_i = sr_data_rs_i.copy()
+            sr_x_ft_i = self._filter(sr_data_rs_i)
 
             if self.plot_flag:
                 local_plot_path_i = (local_plot_path / f"trial_{i}").resolve()
@@ -241,31 +274,48 @@ class OptEWTForecast:
                 else:
                     cleanup_directory(local_plot_path_i)
 
-            # First EWT Decomposition
+            # First Signal Decomposition
             pd_ewt_comps_i = self._signal_decomposition(sr_x_ft_i, nsignal)
-            pd_forecast_i = self._forecast_signal(pd_ewt_comps_i, bclen, local_plot_path_i)
+            pd_forecast_i = self._forecast_signal(pd_ewt_comps_i, bclen, plot_path=local_plot_path_i)
 
             sr_y_i = self.sr_data_rs[pd_forecast_i.index[bclen:]]
-            sr_y_prd_i = pd_forecast_i["mean"][bclen:]
+            dy_i = (sr_y_i.values[-1] - sr_y_i.values[0]) / sr_y_i.size
 
             list_y_ref.append(sr_y_i)
+            list_dy_ref.append(dy_i)
+
+            sr_y_prd_i = pd_forecast_i["mean"][bclen:]
+            dy_prd_i = (sr_y_prd_i.values[-1] - sr_y_prd_i.values[0]) / sr_y_prd_i.size
+
             list_y_prd.append(sr_y_prd_i)
+            list_dy_prd.append(dy_prd_i)
+
+            y_eff_prd_i = dy_prd_i / (dy_i + 1.e-9)
+            list_eff_pred.append(y_eff_prd_i)
 
             np_diff_i = (sr_y_i.values - sr_y_i.values[0]) - (sr_y_prd_i.values - sr_y_prd_i.values[0])
             list_lsq.append(np.dot(np_diff_i, np_diff_i))
 
             if self.plot_flag:
-                sr_y_ewt_sum_i = pd_ewt_comps_i.iloc[bclen:, :-1].sum(axis=1)
+                sr_y_ewt_sum_i = pd_ewt_comps_i.iloc[bclen:, :].sum(axis=1)
 
                 plot_fc(sr_x_ft_i[-self.plt_len:], pd_forecast_i.iloc[bclen:, :-1],
                         bcs=pd_forecast_i["mean"][:bclen],
                         real_future_values=sr_y_i,
-                        decomp_sum=sr_y_ewt_sum_i,
-                        title=f"End Time: {sr_x_ft_i[-1]}",
+                        decomp_sum=sr_y_ewt_sum_i[-self.plt_len:],
+                        title=f"End Time: {sr_x_ft_i.index[-1]}",
                         save_path=f'{local_plot_path_i}/ewt_signal_sum_pred.png')
 
         np_lsq = np.asarray(list_lsq)
-        return np_lsq.sum().item()
+        np_eff_pred = np.asarray(list_eff_pred)
+
+        return {"lsq": np_lsq,
+                "efficiency": np_eff_pred,
+                "dy_ref": np.asarray(list_dy_ref),
+                "dy_prd": np.asarray(list_dy_prd),
+                "refence": list_y_prd,
+                "forecast": list_y_prd,
+                }
 
 
 def get_design_sample(seed: int = 42) -> np.ndarray:
@@ -311,32 +361,46 @@ def main():
     dt = 60
     out_len = 8
 
+    seed = 42
+    # dtype = "ewt"
+    dtype = "emd"
+
     opt_ewt_forecst = OptEWTForecast(input_data=dict_price_data[dt],
                                      out_len=out_len,
+                                     inc_len=200,
                                      plt_len=120,
-                                     plot_flag=True,
+                                     seed=seed,
+                                     dtype=dtype,
+                                     # plot_flag=True,
                                      # debug=True,
                                      )
 
     # Create a sample variables
-    pd_dsvars = get_design_sample()
+    pd_dsvars = get_design_sample(seed=seed)
 
     # Convert timestamp to a datetime object
     dt_object = datetime.datetime.fromtimestamp(time.time())
 
     # Format the datetime object into a string suitable for a filename.
     timestamp_str = dt_object.strftime("%Y%m%d_%H%M%S")     # YYYYMMDD_HHMMSS is a good format for chronological sorting.
-    opt_file_info = (project_local_path / f"opt_ifo_dt_{dt}_forlen_{out_len}_{timestamp_str}.csv").resolve()
+    opt_file_info = (project_local_path / f"opt_ifo_{dtype}_dt_{dt}_forlen_{out_len}_{timestamp_str}.csv").resolve()
 
     list_output = []
     for i, row_i in enumerate(pd_dsvars.iterrows()):
-        lsq_i = opt_ewt_forecst.objective(row_i[1])
+        # row_i[1]['window'] = 100
+        # row_i[1]['decomplen'] = 600
+        # row_i[1]['bclen'] = 9
+        # row_i[1]['nsignal'] = 10
+
+        res_i = opt_ewt_forecst.objective(row_i[1])
 
         input_i = row_i[1].to_dict()
-        input_i["lsq"] = lsq_i
+        input_i["iter"] = i
+        input_i["lsq"] = res_i["lsq"].sum().item()
+        input_i["efficiency"] = (res_i["efficiency"] > 0.1).sum().item() / res_i["efficiency"].size
         list_output.append(input_i)
 
-        print(f" >>> Iter.: {i}, Processing DSVARS: {row_i[1].to_dict()}, LSQ Value: {lsq_i}")
+        print(f" >>> Iter.: {i}, Processing DSVARS: {row_i[1].to_dict()}, LSQ Value: {input_i['lsq']}")
         if i % 10 == 0 and i > 0:
             df_opt_info = pd.DataFrame(list_output)
             df_opt_info.to_csv(opt_file_info, index=False)
