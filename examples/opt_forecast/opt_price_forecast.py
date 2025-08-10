@@ -1,4 +1,3 @@
-
 from pathlib import Path
 import time
 import datetime
@@ -6,6 +5,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from tqdm import tqdm
 from joblib import dump, load
 from scipy.linalg import svd
 from sklearn.preprocessing import MinMaxScaler
@@ -71,7 +71,21 @@ class OptForecast:
                  debug: bool = False,
                  **kwargs,
                  ):
+        """
+        Initialize the OptForecast instance.
 
+        Args:
+            input_data (pd.DataFrame): Input data frame with a 'close' column.
+            out_len (int): Number of future time steps to forecast.
+            plt_len (int): Window length for plotting historical data.
+            inc_len (int): Increment length for sliding evaluation windows.
+            run_size (int): Number of evaluation runs to perform.
+            dtype (str): Decomposition type ('ewt', 'xwt', 'emd', 'ssa').
+            ftype (str): Filter type ('convolution' or none).
+            plot_flag (bool): Whether to enable plotting of results.
+            seed (int): Random seed for reproducibility.
+            debug (bool): If True, use mock forecast model.
+        """
         self.input_data = input_data
         self.out_len = out_len
         self.plt_len = plt_len
@@ -92,14 +106,11 @@ class OptForecast:
         config = {"processes": 1, "spline_kind": 'akima', "DTYPE": float}
         self.emd = ICEEMDAN(trials=20, max_imf=-1, **config)
 
+        self.ssa_wlen = 20  # Window length for SSA
+
         # Forecast Model and function
         self._model = None
         self._forecast = None
-
-        # Optimization Variables
-        self.dsvars = ['window', 'bclen', 'nsignal']
-        self.dsvars_ini = np.array([600, 2, 6], dtype=int)
-        self.dsvars_bounds = [(80, 2000), (0, 10), (4, 15)]
 
         self.df_data = input_data["close"]
         self.scaler_data = MinMaxScaler(feature_range=(0., 100.))
@@ -115,6 +126,13 @@ class OptForecast:
         self._load_forecast_model()
 
     def _preprocess_data(self):
+        """
+        Preprocess and rescale input data, and generate shuffled evaluation indices.
+
+        Populates:
+            self.np_idx_inc_eval (np.ndarray): Shuffled indices for evaluation.
+            self.sr_data_rs (pd.Series): Rescaled time series data.
+        """
         # preprocessing the joblib data
 
         list_incs = []
@@ -138,6 +156,16 @@ class OptForecast:
                              prediction_length: int = 10,
                              **kwargs,
                              ) -> np.ndarray:
+        """
+        Generate a mock forecast for testing and debugging.
+
+        Args:
+            input_x (np.ndarray): Input time series values.
+            prediction_length (int): Length of the forecast to generate.
+
+        Returns:
+            tuple: (quantiles array, mean forecast array).
+        """
 
         x = np.linspace(0., 300., prediction_length)
         y_base = np.sin(x / 2.)
@@ -162,6 +190,10 @@ class OptForecast:
         return np_quantiles, np_mean
 
     def _load_forecast_model(self):
+        """
+        Load the forecasting model. If debug is enabled, set the forecast method to mock.
+        Otherwise, load the pretrained TiRex model.
+        """
         try:
             if not self._debug:
                 self._model: ForecastModel = load_model("NX-AI/TiRex")
@@ -172,10 +204,55 @@ class OptForecast:
             print(f"Error loading model: {e}")
             return
 
+    def _ssa(self,
+             input_signal: pd.Series,
+             nsignal: int,
+             ) -> pd.DataFrame:
+        """
+        Perform Singular Spectrum Analysis (SSA) decomposition on a signal.
+
+        Args:
+            input_signal (pd.Series): Time series to decompose.
+            nsignal (int): Number of components to extract.
+
+        Returns:
+            pd.DataFrame: Reconstructed components as columns.
+        """
+
+        # Step 1: Embedding
+        k = input_signal.size - self.ssa_wlen + 1
+        trajectory_matrix = np.zeros((self.ssa_wlen, k))
+        for i in range(k):
+            trajectory_matrix[:, i] = input_signal.iloc[i:i + self.ssa_wlen]
+
+        # Step 2: SVD
+        ut, sigma, vt = svd(trajectory_matrix)
+
+        # Step 3: Grouping and Reconstruction
+        component_indices = range(nsignal)  # Adjust based on how many components you expect
+        reconstructed_components = []
+
+        for idx in component_indices:
+            component = ut[:, idx:idx + 1] @ np.diag(sigma[idx:idx + 1]) @ vt[idx:idx + 1, :]
+            reconstructed_component = diagonal_averaging(component)
+            reconstructed_components.append(reconstructed_component)
+
+        return pd.DataFrame(np.asarray(reconstructed_components).T, index=input_signal.index)
+
     def _signal_decomposition(self,
                               input_signal: pd.Series,
                               nsignal: int,
                               ) -> pd.DataFrame:
+        """
+        Decompose the input signal using selected method (EWT, XWT, EMD, SSA).
+
+        Args:
+            input_signal (pd.Series): Signal to decompose.
+            nsignal (int): Number of modes/components.
+
+        Returns:
+            pd.DataFrame: Decomposed signal components.
+        """
         # TODO: Add option to use ceemdan as signal decomp method
         assert nsignal > 1, "nsignal should be greater than 1"
 
@@ -201,33 +278,22 @@ class OptForecast:
             return pd_emd_res
 
         elif self.dtype == "ssa":
-            wlen = 20
-
-            # Step 1: Embedding
-            k = input_signal.size - wlen + 1
-            trajectory_matrix = np.zeros((wlen, k))
-            for i in range(k):
-                trajectory_matrix[:, i] = input_signal.iloc[i:i + wlen]
-
-            # Step 2: SVD
-            ut, sigma, vt = svd(trajectory_matrix)
-
-            # Step 3: Grouping and Reconstruction
-            component_indices = range(nsignal)  # Adjust based on how many components you expect
-            reconstructed_components = []
-
-            for idx in component_indices:
-                component = ut[:, idx:idx + 1] @ np.diag(sigma[idx:idx + 1]) @ vt[idx:idx + 1, :]
-                reconstructed_component = diagonal_averaging(component)
-                reconstructed_components.append(reconstructed_component)
-
-            pd_ssa_res = pd.DataFrame(np.asarray(reconstructed_components).T, index=input_signal.index)
-            return pd_ssa_res
+            return self._ssa(input_signal, nsignal)
 
         else:
             raise NotImplementedError(f"Unsupported decomposition type: {self.dtype}. Use 'ewt' or 'emd'.")
 
     def _filter(self, input_signal: pd.Series, flen: int = 3) -> pd.Series:
+        """
+        Apply filtering to the input signal based on configuration.
+
+        Args:
+            input_signal (pd.Series): Series to filter.
+            flen (int): Filter length for convolution.
+
+        Returns:
+            pd.Series: Filtered signal.
+        """
 
         if self.ftype == "convolution":
             if self.convolution_filter is None:
@@ -244,6 +310,17 @@ class OptForecast:
                          bclen: int,
                          plot_path: Optional[Path] = None,
                          ) -> pd.DataFrame:
+        """
+        Forecast each decomposed component, aggregate quantiles and mean, and optionally plot.
+
+        Args:
+            decomp_signals (pd.DataFrame): DataFrame of decomposed components.
+            bclen (int): Backcast length for each component.
+            plot_path (Optional[Path]): Directory to save forecast plots.
+
+        Returns:
+            pd.DataFrame: Concatenated quantiles and mean forecasts.
+        """
 
         np_index = np.arange(0, decomp_signals.shape[0] + self.out_len)
         np_input_idx = np_index[:decomp_signals.shape[0] - bclen]
@@ -287,7 +364,24 @@ class OptForecast:
         return pd.concat([pd_quantiles, sr_mean], axis=1)
 
     def objective(self, dsvars: pd.Series) -> Dict[str, np.ndarray]:
+        """
+        Compute objective metrics for a set of design variables.
 
+        Args:
+            dsvars (pd.Series): Series containing 'window', 'decomplen', 'bclen', 'nsignal'.
+
+        Returns:
+            Dict[str, np.ndarray]: Dictionary with metrics:
+                'lsq': least-squares errors,
+                'efficiency': efficiency ratios,
+                'performance': performance score,
+                'dy_ref': reference slopes,
+                'dy_prd': predicted slopes,
+                'reference': list of reference series,
+                'forecast': list of forecast series.
+        """
+
+        # Optimization Variables
         window = dsvars["window"]
         decomplen = dsvars["decomplen"]
         bclen = dsvars["bclen"]
@@ -298,8 +392,8 @@ class OptForecast:
         assert bclen >= 0, f"bclen should be greater or equal than 0, bclen is {bclen}"
         assert nsignal > 3, f"nsignal should be greater than 3, nsignal is {nsignal}"
 
-        local_plot_path = (project_local_path / f"{self.dtype}_plots").resolve()
-        local_plot_path.mkdir(exist_ok=True)
+        local_obj_plot_path = (project_local_path / f"{self.dtype}_plots").resolve()
+        local_obj_plot_path.mkdir(exist_ok=True)
         local_plot_path_i = None
 
         decomp_idx = np.arange(0, decomplen + bclen)
@@ -311,14 +405,15 @@ class OptForecast:
         list_dy_prd = []
         list_eff_pred = []
 
-        for i, idx_i in enumerate(self.np_idx_inc_eval[:self.run_size]):
+        for i, idx_i in enumerate(tqdm(self.np_idx_inc_eval[:self.run_size], desc="Processing")):
             decomp_idx_i = decomp_idx + (idx_i - decomplen)
-            sr_data_rs_i = self.sr_data_rs.iloc[decomp_idx_i]
 
+            # Input Signal (X), where Y := F(X)
+            sr_data_rs_i = self.sr_data_rs.iloc[decomp_idx_i]
             sr_x_ft_i = self._filter(sr_data_rs_i)
 
             if self.plot_flag:
-                local_plot_path_i = (local_plot_path / f"trial_{i}").resolve()
+                local_plot_path_i = (local_obj_plot_path / f"trial_{i}").resolve()
                 if not local_plot_path_i.is_dir():
                     local_plot_path_i.mkdir(exist_ok=True)
                 else:
@@ -326,14 +421,19 @@ class OptForecast:
 
             # First Signal Decomposition
             pd_ewt_comps_i = self._signal_decomposition(sr_x_ft_i, nsignal)
+            sr_y_decomp_sum_i = pd_ewt_comps_i.iloc[bclen:, :].sum(axis=1)
+
+            # Forecast the signal
             pd_forecast_i = self._forecast_signal(pd_ewt_comps_i, bclen, plot_path=local_plot_path_i)
 
+            # Reference
             sr_y_i = self.sr_data_rs[pd_forecast_i.index[bclen:]]
-            dy_i = (sr_y_i.values[-1] - sr_y_i.values[0]) / sr_y_i.size
+            dy_i = (sr_y_i.values[-1] - sr_x_ft_i.values[-1]) / (sr_y_i.size + 1)
 
             list_y_ref.append(sr_y_i)
             list_dy_ref.append(dy_i)
 
+            # Prediction
             sr_y_prd_i = pd_forecast_i["mean"][bclen:]
             dy_prd_i = (sr_y_prd_i.values[-1] - sr_y_prd_i.values[0]) / sr_y_prd_i.size
 
@@ -341,18 +441,17 @@ class OptForecast:
             list_dy_prd.append(dy_prd_i)
 
             y_eff_prd_i = dy_prd_i / (dy_i + 1.e-9)
-            list_eff_pred.append(y_eff_prd_i)
 
+            # Calculate LSQ cost function
+            list_eff_pred.append(y_eff_prd_i)
             np_diff_i = (sr_y_i.values - sr_y_i.values[0]) - (sr_y_prd_i.values - sr_y_prd_i.values[0])
             list_lsq.append(np.dot(np_diff_i, np_diff_i))
 
             if self.plot_flag:
-                sr_y_ewt_sum_i = pd_ewt_comps_i.iloc[bclen:, :].sum(axis=1)
-
                 plot_fc(sr_x_ft_i[-self.plt_len:], pd_forecast_i.iloc[bclen:, :-1],
                         bcs=pd_forecast_i["mean"][:bclen],
                         real_future_values=sr_y_i,
-                        decomp_sum=sr_y_ewt_sum_i[-self.plt_len:],
+                        decomp_sum=sr_y_decomp_sum_i[-self.plt_len:],
                         title=f"End Time: {sr_x_ft_i.index[-1]}",
                         save_path=f'{local_plot_path_i}/ewt_signal_sum_pred.png')
 
@@ -369,7 +468,7 @@ class OptForecast:
                 "performance": neff_cl,
                 "dy_ref": np.asarray(list_dy_ref),
                 "dy_prd": np.asarray(list_dy_prd),
-                "refence": list_y_prd,
+                "reference": list_dy_ref,
                 "forecast": list_y_prd,
                 }
 
@@ -411,11 +510,11 @@ def main_opt_forecast():
 
     input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
     dict_price_data = load(input_data_path)
-    dt = 15
-    out_len = 12
+    # dt = 15
+    # out_len = 12
 
-    # dt = 60
-    # out_len = 8
+    dt = 60
+    out_len = 8
 
     seed = 42
     # dtype = "ewt"
@@ -429,9 +528,9 @@ def main_opt_forecast():
                                   plt_len=120,
                                   seed=seed,
                                   dtype=dtype,
-                                  ftype=None,
+                                  ftype="",
                                   plot_flag=True,
-                                  # run_size=300,
+                                  # run_size=100,
                                   run_size=300,
                                   )
 
@@ -447,10 +546,10 @@ def main_opt_forecast():
 
     list_output = []
     for i, row_i in enumerate(pd_dsvars.iterrows()):
-        row_i[1]['window'] = 400
-        row_i[1]['decomplen'] = 2200
-        row_i[1]['bclen'] = 2
-        row_i[1]['nsignal'] = 9
+        row_i[1]['window'] = 100
+        row_i[1]['decomplen'] = 600
+        row_i[1]['bclen'] = 9
+        row_i[1]['nsignal'] = 10
 
         res_i = opt_ewt_forecst.objective(row_i[1])
 
@@ -462,7 +561,7 @@ def main_opt_forecast():
         list_output.append(input_i)
 
         print(f" >>> Iter.: {i}, Processing DSVARS: {row_i[1].to_dict()}, LSQ Value: {input_i['lsq']}")
-        if i % 10 == 0 and i > 0:
+        if i % 5 == 0 and i > 0:
             df_opt_info = pd.DataFrame(list_output)
             df_opt_info.to_csv(opt_file_info, index=False)
 
