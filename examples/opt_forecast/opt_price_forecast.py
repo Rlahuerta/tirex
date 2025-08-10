@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from joblib import dump, load
-from networkx import efficiency
+from scipy.linalg import svd
 from sklearn.preprocessing import MinMaxScaler
 from typing import Tuple, Dict, Any, Optional, Union, Callable
 
@@ -44,7 +44,19 @@ def cleanup_directory(directory_path):
                 print(f"Error deleting file {item}: {e}")
 
 
-class OptEWTForecast:
+def diagonal_averaging(matrix: np.ndarray) -> np.ndarray:
+    sl, sk = matrix.shape
+    nv = sl + sk - 1
+    series = np.zeros(nv)
+    for i in range(nv):
+        values = []
+        for j in range(max(0, i + 1 - sk), min(i + 1, sl)):
+            values.append(matrix[j, i - j])
+        series[i] = np.mean(values)
+    return series
+
+
+class OptForecast:
 
     def __init__(self,
                  input_data: pd.DataFrame,
@@ -53,6 +65,7 @@ class OptEWTForecast:
                  inc_len: int = 500,
                  run_size: int = 50,
                  dtype: str = "ewt",
+                 ftype: str = "convolution",
                  plot_flag: bool = False,
                  seed: int = 42,
                  debug: bool = False,
@@ -73,6 +86,7 @@ class OptEWTForecast:
         self._debug = debug
 
         self.dtype = dtype
+        self.ftype = ftype
         self.ewt = EmpiricalWaveletTransform()
 
         config = {"processes": 1, "spline_kind": 'akima', "DTYPE": float}
@@ -169,7 +183,6 @@ class OptEWTForecast:
             # First EWT Decomposition
             np_ewt_res, np_mwvlt, np_bcs = self.ewt(input_signal.values, nsignal)
             pd_ewt_res = pd.DataFrame(np_ewt_res[-input_signal.size:], index=input_signal.index)
-
             return pd_ewt_res
 
         elif self.dtype == "xwt":
@@ -179,27 +192,52 @@ class OptEWTForecast:
             np_sign_res = (input_signal.values - np_ewt_sum).reshape(-1, 1)
             np_xwt = np.concatenate((np_ewt_res_fix, np_sign_res), axis=1)
             pd_ewt_res = pd.DataFrame(np_xwt, index=input_signal.index)
-
             return pd_ewt_res
 
         elif self.dtype == "emd":
             # First EMD Decomposition
             np_emd_res = self.emd.iceemdan(input_signal.values, max_imf=nsignal)
             pd_emd_res = pd.DataFrame(np_emd_res[:, -input_signal.size:].T, index=input_signal.index)
-
             return pd_emd_res
+
+        elif self.dtype == "ssa":
+            wlen = 20
+
+            # Step 1: Embedding
+            k = input_signal.size - wlen + 1
+            trajectory_matrix = np.zeros((wlen, k))
+            for i in range(k):
+                trajectory_matrix[:, i] = input_signal.iloc[i:i + wlen]
+
+            # Step 2: SVD
+            ut, sigma, vt = svd(trajectory_matrix)
+
+            # Step 3: Grouping and Reconstruction
+            component_indices = range(nsignal)  # Adjust based on how many components you expect
+            reconstructed_components = []
+
+            for idx in component_indices:
+                component = ut[:, idx:idx + 1] @ np.diag(sigma[idx:idx + 1]) @ vt[idx:idx + 1, :]
+                reconstructed_component = diagonal_averaging(component)
+                reconstructed_components.append(reconstructed_component)
+
+            pd_ssa_res = pd.DataFrame(np.asarray(reconstructed_components).T, index=input_signal.index)
+            return pd_ssa_res
 
         else:
             raise NotImplementedError(f"Unsupported decomposition type: {self.dtype}. Use 'ewt' or 'emd'.")
 
     def _filter(self, input_signal: pd.Series, flen: int = 3) -> pd.Series:
 
-        if self.convolution_filter is None:
-            self.convolution_filter = ConvolutionFilter(adim=input_signal.size, length=flen)
-        elif self.convolution_filter.adim != input_signal.shape[0]:
-            self.convolution_filter = ConvolutionFilter(adim=input_signal.size, length=flen)
+        if self.ftype == "convolution":
+            if self.convolution_filter is None:
+                self.convolution_filter = ConvolutionFilter(adim=input_signal.size, length=flen)
+            elif self.convolution_filter.adim != input_signal.shape[0]:
+                self.convolution_filter = ConvolutionFilter(adim=input_signal.size, length=flen)
 
-        return pd.Series(self.convolution_filter(input_signal.values), index=input_signal.index)
+            return pd.Series(self.convolution_filter(input_signal.values), index=input_signal.index)
+        else:
+            return input_signal
 
     def _forecast_signal(self,
                          decomp_signals: pd.DataFrame,
@@ -369,29 +407,33 @@ def get_design_sample(seed: int = 42) -> np.ndarray:
 
     return pd_dsvars.iloc[np_dsvars_idx, :]
 
-def main():
+def main_opt_forecast():
 
     input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
     dict_price_data = load(input_data_path)
-    # dt = 15
-    # out_len = 12
+    dt = 15
+    out_len = 12
 
-    dt = 60
-    out_len = 8
+    # dt = 60
+    # out_len = 8
 
     seed = 42
     # dtype = "ewt"
-    dtype = "xwt"
+    # dtype = "xwt"
     # dtype = "emd"
+    dtype = "ssa"
 
-    opt_ewt_forecst = OptEWTForecast(input_data=dict_price_data[dt],
-                                     out_len=out_len,
-                                     inc_len=200,
-                                     plt_len=120,
-                                     seed=seed,
-                                     dtype=dtype,
-                                     # plot_flag=True,
-                                     )
+    opt_ewt_forecst = OptForecast(input_data=dict_price_data[dt],
+                                  out_len=out_len,
+                                  inc_len=50,
+                                  plt_len=120,
+                                  seed=seed,
+                                  dtype=dtype,
+                                  ftype=None,
+                                  plot_flag=True,
+                                  # run_size=300,
+                                  run_size=300,
+                                  )
 
     # Create a sample variables
     pd_dsvars = get_design_sample(seed=seed)
@@ -405,10 +447,10 @@ def main():
 
     list_output = []
     for i, row_i in enumerate(pd_dsvars.iterrows()):
-        # row_i[1]['window'] = 300
-        # row_i[1]['decomplen'] = 800
-        # row_i[1]['bclen'] = 9
-        # row_i[1]['nsignal'] = 10
+        row_i[1]['window'] = 400
+        row_i[1]['decomplen'] = 2200
+        row_i[1]['bclen'] = 2
+        row_i[1]['nsignal'] = 9
 
         res_i = opt_ewt_forecst.objective(row_i[1])
 
@@ -426,4 +468,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main_opt_forecast()
