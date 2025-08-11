@@ -29,4 +29,5 @@ dependencies:
       - dacite~=1.9.2
       - yfinance
       - PyWavelets
+      - statsmodels
       - pytest

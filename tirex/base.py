@@ -65,11 +65,23 @@ def load_model(path: str, device: str = "cuda:0", hf_kwargs=None, ckp_kwargs=Non
     Examples:
         model: ForecastModel = load_model("NX-AI/TiRex")
     """
+    # If the user provided a raw checkpoint file, attempt to load it with each registered model class
+    if os.path.exists(path) and path.endswith('.ckpt'):
+        for model_cls in PretrainedModel.REGISTRY.values():
+            try:
+                model = model_cls.from_pretrained(path, device=device, hf_kwargs=hf_kwargs, ckp_kwargs=ckp_kwargs)
+                return model
+            except Exception:
+                continue
+        raise ValueError(f"Could not load checkpoint file {path} with any registered model")
+
     try:
         _, model_id = parse_hf_repo_id(path).split("/")
     except:
         raise ValueError(f"Invalid model path {path}")
+
     model_cls = PretrainedModel.REGISTRY.get(model_id, None)
     if model_cls is None:
         raise ValueError(f"Invalid model id {model_id}")
+
     return model_cls.from_pretrained(path, device=device, hf_kwargs=hf_kwargs, ckp_kwargs=ckp_kwargs)
