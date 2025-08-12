@@ -9,7 +9,13 @@ class TrailingStopOrder:
                  trail_type='absolute',
                  ):
 
+        # Validate trail_type
+        if trail_type not in ('absolute', 'percentage'):
+            raise ValueError(f"Invalid trail_type: {trail_type}")
+
         self.size_value = size
+        self.total_asset_initial_value = size * initial_price
+
         self.trail_value = trail_value
         self.direction = np.sign(trail_value)  # 'buy' or 'sell'
 
@@ -17,7 +23,6 @@ class TrailingStopOrder:
         self.initial_price = initial_price
         self.close_price = None
         self.current_stop_price = self.calculate_initial_stop_price(initial_price)
-
         self.gain = 0.
 
     def calculate_initial_stop_price(self, initial_price: float):
@@ -53,9 +58,9 @@ class TrailingStopOrder:
             trigger_flag = current_price >= self.current_stop_price
             diff_price *= -1
 
+        self.gain = self.size_value * diff_price
         if trigger_flag:
             self.close_price = current_price
-            self.gain = self.size_value * diff_price
 
         return trigger_flag
 
@@ -76,6 +81,7 @@ if __name__ == "__main__":
                 size= 10.,
                 initial_price=100,
                 trail_value=-15,
+                # trail_value=15,
                 trail_type='percentage',
             )
         else:
@@ -87,3 +93,5 @@ if __name__ == "__main__":
             else:
                 trailing_stop_order.update_stop_price(price_i)
                 print(f"Market price: {price_i} (iter: {i}), Current stop price: {trailing_stop_order.current_stop_price:.2f}")
+
+    print(f"Current gain: {trailing_stop_order.gain:.2f}")
