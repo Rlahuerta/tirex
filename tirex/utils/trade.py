@@ -1,5 +1,6 @@
 import numpy as np
 
+
 class TrailingStopOrder:
     def __init__(self,
                  size: float,
@@ -13,7 +14,11 @@ class TrailingStopOrder:
         self.direction = np.sign(trail_value)  # 'buy' or 'sell'
 
         self.trail_type = trail_type  # 'absolute' or 'percentage'
+        self.initial_price = initial_price
+        self.close_price = None
         self.current_stop_price = self.calculate_initial_stop_price(initial_price)
+
+        self.gain = 0.
 
     def calculate_initial_stop_price(self, initial_price: float):
         if self.trail_type == 'percentage':
@@ -40,10 +45,19 @@ class TrailingStopOrder:
 
     def check_order_trigger(self, current_price: float):
 
+        diff_price = current_price - self.initial_price
         if self.direction >= 0.:    # buy
-            return current_price <= self.current_stop_price
-        else:  # sell
-            return current_price >= self.current_stop_price
+            trigger_flag = current_price <= self.current_stop_price
+
+        else:       # sell
+            trigger_flag = current_price >= self.current_stop_price
+            diff_price *= -1
+
+        if trigger_flag:
+            self.close_price = current_price
+            self.gain = self.size_value * diff_price
+
+        return trigger_flag
 
 
 # Example usage
