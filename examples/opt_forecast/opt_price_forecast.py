@@ -1,21 +1,23 @@
 from pathlib import Path
 import time
 import datetime
-import warnings
+# import warnings
 import numpy as np
 import pandas as pd
 
 from tqdm import tqdm
-from joblib import dump, load
+from joblib import load
 from scipy.linalg import svd
+from scipy.optimize import differential_evolution
 from sklearn.preprocessing import MinMaxScaler
-from typing import Tuple, Dict, Any, Optional, Union, Callable
+from typing import Tuple, List, Dict, Any, Optional, Union, Callable
 
 from tirex import ForecastModel, load_model
 from tirex.utils.filters import ConvolutionFilter
 from tirex.utils.ewt import EmpiricalWaveletTransform
 from tirex.utils.ceemdan import ICEEMDAN
-from tirex.utils.plot import plot_fc, emd_plot
+from tirex.utils.plot import plot_fc
+from tirex.utils.trade import TrailingStopOrder
 
 # Add the project root to the Python path
 project_local_path = Path(__file__).resolve().parent
@@ -54,6 +56,17 @@ def diagonal_averaging(matrix: np.ndarray) -> np.ndarray:
             values.append(matrix[j, i - j])
         series[i] = np.mean(values)
     return series
+
+
+def create_time_index(delta_time, ini_time, size: int) -> List[datetime.datetime]:
+
+    list_output_datetime_idx = []
+    dt_current = ini_time
+    for i in range(size):
+        dt_current += delta_time
+        list_output_datetime_idx.append(dt_current)
+
+    return list_output_datetime_idx
 
 
 class OptForecast:
@@ -107,6 +120,7 @@ class OptForecast:
         self.emd = ICEEMDAN(trials=20, max_imf=-1, **config)
 
         self.ssa_wlen = 20  # Window length for SSA
+        self._prd_dsvars = pd.Series()
 
         # Forecast Model and function
         self._model = None
@@ -119,7 +133,6 @@ class OptForecast:
         self.sr_data_rs = None
 
         self.convolution_filter = None
-
         self.np_idx_inc_eval = np.array([])
 
         self._preprocess_data()
@@ -155,7 +168,7 @@ class OptForecast:
     def _mock_forecast_model(input_x: np.ndarray,
                              prediction_length: int = 10,
                              **kwargs,
-                             ) -> np.ndarray:
+                             ) -> (np.ndarray, np.ndarray):
         """
         Generate a mock forecast for testing and debugging.
 
@@ -196,7 +209,8 @@ class OptForecast:
         """
         try:
             if not self._debug:
-                self._model: ForecastModel = load_model("NX-AI/TiRex")
+                model_file_path = (Path(__file__).parent.parent.parent / "model" / "model.ckpt").resolve()
+                self._model: ForecastModel = load_model(str(model_file_path))
                 self._forecast = self._model.forecast
             else:
                 self._forecast = self._mock_forecast_model
@@ -204,10 +218,11 @@ class OptForecast:
             print(f"Error loading model: {e}")
             return
 
-    def _ssa(self,
-             input_signal: pd.Series,
+    @staticmethod
+    def _ssa(input_signal: pd.Series,
              nsignal: int,
-             ) -> pd.DataFrame:
+             wlen: int = 20,
+             ) -> np.ndarray:
         """
         Perform Singular Spectrum Analysis (SSA) decomposition on a signal.
 
@@ -220,10 +235,10 @@ class OptForecast:
         """
 
         # Step 1: Embedding
-        k = input_signal.size - self.ssa_wlen + 1
-        trajectory_matrix = np.zeros((self.ssa_wlen, k))
+        k = input_signal.size - wlen + 1
+        trajectory_matrix = np.zeros((wlen, k))
         for i in range(k):
-            trajectory_matrix[:, i] = input_signal.iloc[i:i + self.ssa_wlen]
+            trajectory_matrix[:, i] = input_signal.iloc[i:i + wlen]
 
         # Step 2: SVD
         ut, sigma, vt = svd(trajectory_matrix)
@@ -237,7 +252,7 @@ class OptForecast:
             reconstructed_component = diagonal_averaging(component)
             reconstructed_components.append(reconstructed_component)
 
-        return pd.DataFrame(np.asarray(reconstructed_components).T, index=input_signal.index)
+        return np.asarray(reconstructed_components).T
 
     def _signal_decomposition(self,
                               input_signal: pd.Series,
@@ -271,6 +286,17 @@ class OptForecast:
             pd_ewt_res = pd.DataFrame(np_xwt, index=input_signal.index)
             return pd_ewt_res
 
+        elif self.dtype == "swt":
+            np_ssa_res = self._ssa(input_signal, 2, wlen=8)
+
+            np_ewt_res, np_mwvlt, np_bcs = self.ewt(np_ssa_res[:, 0], nsignal)
+            np_swt = np.concatenate((np_ewt_res[-input_signal.size:], np_ssa_res[:, 1:]), axis=1)
+            np_swt_sum = np_swt.sum(axis=1)
+            np_swt_res = input_signal.values - np_swt_sum
+            np_swt_fnl = np.concatenate((np_swt, np_swt_res.reshape(-1, 1)), axis=1)
+            pd_swt_res = pd.DataFrame(np_swt_fnl, index=input_signal.index)
+            return pd_swt_res
+
         elif self.dtype == "emd":
             # First EMD Decomposition
             np_emd_res = self.emd.iceemdan(input_signal.values, max_imf=nsignal)
@@ -278,7 +304,7 @@ class OptForecast:
             return pd_emd_res
 
         elif self.dtype == "ssa":
-            return self._ssa(input_signal, nsignal)
+            return pd.DataFrame(self._ssa(input_signal, nsignal, wlen=self.ssa_wlen), index=input_signal.index)
 
         else:
             raise NotImplementedError(f"Unsupported decomposition type: {self.dtype}. Use 'ewt' or 'emd'.")
@@ -302,6 +328,7 @@ class OptForecast:
                 self.convolution_filter = ConvolutionFilter(adim=input_signal.size, length=flen)
 
             return pd.Series(self.convolution_filter(input_signal.values), index=input_signal.index)
+
         else:
             return input_signal
 
@@ -327,12 +354,9 @@ class OptForecast:
         np_output_idx = np_index[decomp_signals.shape[0] - bclen:]
         dt_time = decomp_signals.index[1] - decomp_signals.index[0]
 
-        list_output_datetime_idx = []
-        dt_current = decomp_signals.index[np_input_idx][-1]
-        for i in range(np_output_idx.size):
-            dt_current += dt_time
-            list_output_datetime_idx.append(dt_current)
-
+        list_output_datetime_idx = create_time_index(dt_time,
+                                                     decomp_signals.index[np_input_idx][-1],
+                                                     np_output_idx.size)
         list_quantiles = []
         list_mean = []
 
@@ -420,24 +444,22 @@ class OptForecast:
                     cleanup_directory(local_plot_path_i)
 
             # First Signal Decomposition
-            pd_ewt_comps_i = self._signal_decomposition(sr_x_ft_i, nsignal)
-            sr_y_decomp_sum_i = pd_ewt_comps_i.iloc[bclen:, :].sum(axis=1)
+            pd_signal_decomp_i = self._signal_decomposition(sr_x_ft_i, nsignal)
+            sr_y_decomp_sum_i = pd_signal_decomp_i.iloc[bclen:, :].sum(axis=1)
 
             # Forecast the signal
-            pd_forecast_i = self._forecast_signal(pd_ewt_comps_i, bclen, plot_path=local_plot_path_i)
+            pd_forecast_i = self._forecast_signal(pd_signal_decomp_i[-(window + bclen):],
+                                                  bclen,
+                                                  plot_path=local_plot_path_i)
 
             # Reference
             sr_y_i = self.sr_data_rs[pd_forecast_i.index[bclen:]]
             dy_i = (sr_y_i.values[-1] - sr_x_ft_i.values[-1]) / (sr_y_i.size + 1)
-
-            list_y_ref.append(sr_y_i)
             list_dy_ref.append(dy_i)
 
             # Prediction
             sr_y_prd_i = pd_forecast_i["mean"][bclen:]
             dy_prd_i = (sr_y_prd_i.values[-1] - sr_y_prd_i.values[0]) / sr_y_prd_i.size
-
-            list_y_prd.append(sr_y_prd_i)
             list_dy_prd.append(dy_prd_i)
 
             y_eff_prd_i = dy_prd_i / (dy_i + 1.e-9)
@@ -448,6 +470,9 @@ class OptForecast:
             list_lsq.append(np.dot(np_diff_i, np_diff_i))
 
             if self.plot_flag:
+                list_y_ref.append(sr_y_i)
+                list_y_prd.append(sr_y_prd_i)
+
                 plot_fc(sr_x_ft_i[-self.plt_len:], pd_forecast_i.iloc[bclen:, :-1],
                         bcs=pd_forecast_i["mean"][:bclen],
                         real_future_values=sr_y_i,
@@ -458,8 +483,7 @@ class OptForecast:
         np_lsq = np.asarray(list_lsq)
         np_eff_pred = np.asarray(list_eff_pred)
 
-        np_dy_prd_abs = np.abs(np.asarray(list_dy_prd))
-        np_dy_prd_idx = np_dy_prd_abs > 0.002
+        np_dy_prd_idx = np.abs(np.asarray(list_dy_prd)) > 0.002
         np_eff_pred_cl = np_eff_pred[np_dy_prd_idx]
         neff_cl = (np_eff_pred_cl > 0.).sum() / np_eff_pred_cl.size
 
@@ -472,14 +496,101 @@ class OptForecast:
                 "forecast": list_y_prd,
                 }
 
+    def opt_trade(self, td_dsvars: np.ndarray) -> float:
+
+        # Forecast Variables
+        window = self._prd_dsvars["window"]
+        decomplen = self._prd_dsvars["decomplen"]
+        bclen = self._prd_dsvars["bclen"]
+        nsignal = self._prd_dsvars["nsignal"]
+
+        # Output length for trailing stop order
+        output_ref = 180
+
+        local_obj_plot_path = (project_local_path / f"{self.dtype}_plots").resolve()
+        local_obj_plot_path.mkdir(exist_ok=True)
+        local_plot_path_i = None
+
+        dt_time = self.sr_data_rs.index[1] - self.sr_data_rs.index[0]
+        decomp_idx = np.arange(0, decomplen + bclen)
+        list_trade_ops = []
+        list_trade_gain = []
+
+        for i, idx_i in enumerate(tqdm(self.np_idx_inc_eval[:self.run_size], desc="Processing")):
+            decomp_idx_i = decomp_idx + (idx_i - decomplen)
+
+            # Input Signal (X), where Y := F(X)
+            sr_data_rs_i = self.sr_data_rs.iloc[decomp_idx_i]
+            sr_x_ft_i = self._filter(sr_data_rs_i)
+
+            if self.plot_flag:
+                local_plot_path_i = (local_obj_plot_path / f"trial_{i}").resolve()
+                if not local_plot_path_i.is_dir():
+                    local_plot_path_i.mkdir(exist_ok=True)
+                else:
+                    cleanup_directory(local_plot_path_i)
+
+            # First Signal Decomposition
+            pd_signal_decomp_i = self._signal_decomposition(sr_x_ft_i, nsignal)
+
+            # Forecast the signal
+            pd_forecast_i = self._forecast_signal(pd_signal_decomp_i[-(window + bclen):],
+                                                  bclen,
+                                                  plot_path=local_plot_path_i)
+
+            # Prediction
+            sr_y_prd_i = pd_forecast_i["mean"][bclen:]
+            dy_prd_i = (sr_y_prd_i.values[-1] - sr_y_prd_i.values[0]) / sr_y_prd_i.size
+            dy_perc_i = (dy_prd_i / sr_x_ft_i.iloc[-1]).item() * 100.
+            list_trade_ops.append(dy_perc_i)
+
+            # Reference
+            list_output_idx_i = create_time_index(dt_time, pd_forecast_i.index[bclen:][0] - dt_time, output_ref)
+            sr_y_i = self.sr_data_rs[list_output_idx_i]
+
+            # trailing order parameter
+            ## tolerance parameter (to enter into the trade)
+            if np.abs(dy_perc_i) >= td_dsvars[0]:
+                trail_value_i = td_dsvars[1] * dy_perc_i
+
+                trailing_stop_order_i = TrailingStopOrder(
+                    size=10.,
+                    initial_price=sr_y_i.values[0].item(),
+                    trail_value=trail_value_i,
+                    trail_type='percentage',
+                )
+
+                for k, price_k in enumerate(sr_y_i.items()):
+                    # Add full candle stick price
+                    if trailing_stop_order_i.check_order_trigger(price_k[1]):
+                        # print(f"Order triggered at market price: {price_k[1]} (iter: {k}), with stop price: {trailing_stop_order_i.current_stop_price}")
+                        break
+                    else:
+                        trailing_stop_order_i.update_stop_price(price_k[1])
+                        # print(f"Market price: {price_k[1]} (iter: {k}), Current stop price: {trailing_stop_order_i.current_stop_price:.2f}")
+
+                list_trade_gain.append(trailing_stop_order_i.gain)
+
+                if self.plot_flag:
+                    # plot the trade operation
+                    sr_y_signal_decomp_sum_i = pd_signal_decomp_i.iloc[bclen:, :].sum(axis=1)
+
+            else:
+                list_trade_gain.append(0.)
+
+        fval = -np.asarray(list_trade_gain).sum()
+        print(f"Trade gain: {fval}")
+
+        return fval
+
 
 def get_design_sample(seed: int = 42) -> np.ndarray:
 
     # Create a sample variables
     np_window = np.arange(100, 2000, step=100)
-    np_decomplen = np.arange(100, 3000, step=100)
+    np_decomplen = np.arange(500, 8000, step=100)
     np_bclen = np.arange(0, 10)
-    np_nsignal = np.arange(4, 15)
+    np_nsignal = np.arange(4, 20)
 
     list_window = []
     list_decomplen = []
@@ -506,6 +617,7 @@ def get_design_sample(seed: int = 42) -> np.ndarray:
 
     return pd_dsvars.iloc[np_dsvars_idx, :]
 
+
 def main_opt_forecast():
 
     input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
@@ -519,9 +631,12 @@ def main_opt_forecast():
     seed = 42
     # dtype = "ewt"
     # dtype = "xwt"
+    dtype = "swt"
     # dtype = "emd"
-    dtype = "ssa"
+    # dtype = "ssa"
 
+    run_size = 100
+    # run_size = 200
     opt_ewt_forecst = OptForecast(input_data=dict_price_data[dt],
                                   out_len=out_len,
                                   inc_len=50,
@@ -529,9 +644,8 @@ def main_opt_forecast():
                                   seed=seed,
                                   dtype=dtype,
                                   ftype="",
-                                  plot_flag=True,
-                                  # run_size=100,
-                                  run_size=300,
+                                  # plot_flag=True,
+                                  run_size=run_size,
                                   )
 
     # Create a sample variables
@@ -542,14 +656,14 @@ def main_opt_forecast():
 
     # Format the datetime object into a string suitable for a filename.
     timestamp_str = dt_object.strftime("%Y%m%d_%H%M%S")     # YYYYMMDD_HHMMSS is a good format for chronological sorting.
-    opt_file_info = (project_local_path / f"opt_ifo_{dtype}_dt_{dt}_forlen_{out_len}_{timestamp_str}.csv").resolve()
+    opt_file_info = (project_local_path / f"opt_ifo_{dtype}_dt_{dt}_forlen_{out_len}_rsize_{run_size}_{timestamp_str}.csv").resolve()
 
     list_output = []
     for i, row_i in enumerate(pd_dsvars.iterrows()):
-        row_i[1]['window'] = 100
-        row_i[1]['decomplen'] = 600
-        row_i[1]['bclen'] = 9
-        row_i[1]['nsignal'] = 10
+        # row_i[1]['window'] = 1600
+        # row_i[1]['decomplen'] = 4600
+        # row_i[1]['bclen'] = 3
+        # row_i[1]['nsignal'] = 14
 
         res_i = opt_ewt_forecst.objective(row_i[1])
 
@@ -566,5 +680,60 @@ def main_opt_forecast():
             df_opt_info.to_csv(opt_file_info, index=False)
 
 
+def main_opt_trade():
+
+    input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
+    dict_price_data = load(input_data_path)
+    dt = 15
+    # dt = 60
+
+    out_len = 12
+    # out_len = 8
+
+    seed = 42
+    dtype = "swt"
+    # dtype = "emd"
+
+    run_size = 50
+    # run_size = 300
+    opt_ewt_forecst = OptForecast(input_data=dict_price_data[dt],
+                                  out_len=out_len,
+                                  inc_len=50,
+                                  plt_len=120,
+                                  seed=seed,
+                                  dtype=dtype,
+                                  ftype="",
+                                  # plot_flag=True,
+                                  run_size=run_size,
+                                  )
+
+    sr_opt_forecast = pd.Series(dict(window=1600, decomplen=1900, bclen=3, nsignal=6))
+    opt_ewt_forecst._prd_dsvars = sr_opt_forecast
+
+
+    # [0]: tolerance parameter (to enter into the trade)
+    # [1]: trailing stop value (percentage)
+    np_opt_trade = np.array([0.05, 1.], dtype=float)
+    # fval = opt_ewt_forecst.opt_trade(np_opt_trade)
+
+    bounds = [(0.0001, 2.), (0.0001, 10.)]
+
+    result = differential_evolution(
+        func=opt_ewt_forecst.opt_trade,
+        bounds=bounds,
+        x0=np_opt_trade,
+        strategy='best1bin',
+        maxiter=100,    # Number of generations
+        popsize=15,     # Population size
+        tol=0.001,      # Tolerance for convergence
+        disp=True,      # Display optimization progress
+        seed=42         # Uncomment for reproducibility
+    )
+
+    print(f"Optimization result: {result}")
+    test = 1.
+
+
 if __name__ == "__main__":
-    main_opt_forecast()
+    # main_opt_forecast()
+    main_opt_trade()
