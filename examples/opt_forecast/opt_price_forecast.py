@@ -16,6 +16,8 @@ from tirex.utils.filters import ConvolutionFilter, quadratic_fit_series
 from tirex.utils.ewt import EmpiricalWaveletTransform
 from tirex.utils.ceemdan import ICEEMDAN
 from tirex.utils.ssa import ssa
+from tirex.utils.time import create_time_index
+from tirex.utils.path import cleanup_directory
 from tirex.utils.plot import plot_fc, plot_mpl_ticker
 from tirex.utils.trade import TrailingStopOrder
 
@@ -25,36 +27,6 @@ project_local_path = Path(__file__).resolve().parent
 local_plot_path = (project_local_path / "ewt_plots").resolve()
 local_plot_path.mkdir(exist_ok=True)
 
-
-def cleanup_directory(directory_path):
-    # Create a Path object for the directory
-    path = Path(directory_path)
-
-    # Ensure the directory exists
-    if not path.exists() or not path.is_dir():
-        print(f"The directory {directory_path} does not exist.")
-        return
-
-    # Iterate through each item in the directory
-    for item in path.iterdir():
-        # Check if it's a file and delete it
-        if item.is_file():
-            try:
-                item.unlink()  # Delete the file
-                print(f"Deleted file: {item}")
-            except Exception as e:
-                print(f"Error deleting file {item}: {e}")
-
-
-def create_time_index(delta_time, ini_time, size: int) -> List[datetime.datetime]:
-
-    list_output_datetime_idx = []
-    dt_current = ini_time
-    for i in range(size):
-        dt_current += delta_time
-        list_output_datetime_idx.append(dt_current)
-
-    return list_output_datetime_idx
 
 
 class OptForecast:
