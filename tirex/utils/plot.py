@@ -387,68 +387,60 @@ def _add_candlestick(ax, tickers: pd.DataFrame, dt: int = None):
     ax.bar(down.index, down.low - down.close, width2, bottom=down.close, color=col1)
 
 
-def plot_mpl_ticker(tickers_trn_data: pd.DataFrame,
-                    tickers_tst_data: pd.DataFrame = None,
+def plot_mpl_ticker(input_tickers: pd.DataFrame,
+                    output_tickers: pd.DataFrame = None,
                     plot_name: str = None,
-                    close: bool = False,
+                    close: bool = True,
                     dpi: int = 800,
+                    **kwargs,
                     ):
 
     # Assuming `tickers_data` is indexed by date and contains open, high, low, close columns
     fig, ax = plt.subplots(figsize=(24, 8))
     fig.suptitle('Asset Price and Overlays', fontsize=12)
 
-    time_increment = int(tickers_trn_data.index.to_series().diff().mean().total_seconds() / 60)
+    time_increment = int(input_tickers.index.to_series().diff().mean().total_seconds() / 60)
 
     # Plotting candlesticks
-    _add_candlestick(ax, tickers_trn_data, dt=time_increment)
+    _add_candlestick(ax, input_tickers, dt=time_increment)
+    ax.axvline(input_tickers['close'].index[-1], color='red', linestyle='--')
 
-    if 'ewt' in tickers_trn_data.keys():
-        ax.plot(tickers_trn_data.index, tickers_trn_data['ewt'], color='orange', label='EWT', linewidth=1.)
+    if 'swt' in kwargs.keys():
+        ax.plot(kwargs['swt'].index, kwargs['swt'].values, color='orange', label='SWT', linewidth=1.)
 
-    if 'filter' in tickers_trn_data.keys():
-        ax.plot(tickers_trn_data.index, tickers_trn_data['filter'], color='green', label='Convolve Filter', linewidth=1.)
+    # Prediction and other overlays
+    if isinstance(output_tickers, pd.DataFrame):
+        _add_candlestick(ax, output_tickers[['open', 'close', 'high', 'low']], dt=time_increment)
 
-    if 'trn' in tickers_trn_data.keys():
-        ax.plot(tickers_trn_data.index, tickers_trn_data['trn'], color='blue', label='Training', linewidth=1.)
-
-    if 'filter_upp' in tickers_trn_data.keys() and 'filter_lwr' in tickers_trn_data.keys():
-        ax.fill_between(tickers_trn_data.index,
-                        tickers_trn_data['filter_lwr'],
-                        tickers_trn_data['filter_upp'],
-                        interpolate=True,
-                        alpha=0.3)
-
-
-    if isinstance(tickers_tst_data, pd.DataFrame):
-        _add_candlestick(ax, tickers_tst_data[['open', 'close', 'high', 'low']], dt=time_increment)
-
-        if 'Prediction' in tickers_tst_data.keys():
-            ax.plot(tickers_tst_data.index, tickers_tst_data['Prediction'], color='blue', label='Pred',
+        if 'Prediction' in kwargs.keys():
+            ax.plot(kwargs['Prediction'].index, kwargs['Prediction'].values, color='blue', label='Pred',
                     linewidth=1, linestyle="-.")
 
-        if 'Mean' in tickers_tst_data.keys():
-            ax.plot(tickers_tst_data.index, tickers_tst_data['Mean'], color='green', label='Pred-Mean',
+        if 'Mean' in kwargs.keys():
+            ax.plot(kwargs['Mean'].index, kwargs['Mean'].values, color='green', label='Pred-Mean',
                     linewidth=2, linestyle="-.")
 
-        # if 'Mode' in tickers_tst_data.keys():
-        #     ax.plot(tickers_tst_data.index, tickers_tst_data['Mode'], color='green', label='Pred-Mode',
-        #             linewidth=2, linestyle="-.")
-
-        if 'poly2' in tickers_tst_data.keys():
-            ax.plot(tickers_tst_data.index, tickers_tst_data['poly2'], color='purple', label='Reg-Poly2',
+        if 'poly2' in kwargs.keys():
+            ax.plot(kwargs['poly2'].index, kwargs['poly2'].values, color='purple', label='Reg-Poly2',
                     linewidth=2, linestyle="-.")
 
-        if 'Reference' in tickers_tst_data.keys():
-            ax.plot(tickers_tst_data.index, tickers_tst_data['Reference'], color='red', label='Reference',
-                    linewidth=2, linestyle="-.")
+        if 'ops' in kwargs.keys():
+            if kwargs['ops'].diff().iloc[-1].item() >= 0:
+                ops_color = 'darkgreen'
+            else:
+                ops_color = 'tomato'
 
-        if 'q05' in tickers_tst_data.keys() and 'q95' in tickers_tst_data.keys():
-            ax.fill_between(tickers_tst_data.index,
-                            tickers_tst_data['q05'],
-                            tickers_tst_data['q95'],
-                            interpolate=True,
-                            alpha=0.3)
+            ax.plot(kwargs['ops'].index, kwargs['ops'].values, color=ops_color, label='Trailing Op',
+                    linewidth=4)
+
+        if 'quantile' in kwargs.keys():
+            quantile_lower_bound = kwargs['quantile'].iloc[:, 0]
+            quantile_upper_bound = kwargs['quantile'].iloc[:, -1]
+
+            ax.fill_between(
+                kwargs['quantile'].index, quantile_lower_bound.values, quantile_upper_bound.values,
+                color="#d94e4e", alpha=0.1, label="Forecast 10% - 90% Quantiles"
+            )
 
     # Formatting the x-axis as dates
     ax.xaxis_date()
@@ -466,7 +458,7 @@ def plot_mpl_ticker(tickers_trn_data: pd.DataFrame,
     plt.setp(ax.get_xticklabels(), rotation=45)
 
     # Titles and labels
-    ax.set_xlabel(f"Date - {tickers_tst_data.index[0].strftime('%B')}/{tickers_tst_data.index[0].year}")
+    ax.set_xlabel(f"Date - {input_tickers.index[-1].strftime('%B')}/{input_tickers.index[-1].year}")
     ax.set_ylabel('Price')
 
     ax.grid(which='minor', alpha=0.2, axis='x')

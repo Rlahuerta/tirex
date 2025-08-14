@@ -311,3 +311,11 @@ def ema(data: np.ndarray, n: int) -> np.ndarray:
         np_ema[i] = (data[i] * multiplier) + (np_ema[i - 1] * (1 - multiplier))
 
     return np_ema
+
+
+def quadratic_fit_series(series: pd.Series) -> pd.Series:
+    x = np.arange(len(series))
+    y = series.values
+    coeffs = np.polyfit(x, y, 2)
+    y_fit = np.polyval(coeffs, x)
+    return pd.Series(y_fit, index=series.index)
