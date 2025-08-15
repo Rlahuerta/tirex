@@ -526,13 +526,15 @@ class OptForecast:
         np_eff_pred_cl = np_eff_pred[np_dy_prd_idx]
         neff_cl = (np_eff_pred_cl > 0.).sum() / np_eff_pred_cl.size
 
+        eqv_loss = np_loss.sum() / 10 + neff_cl
+
         self.loss_info["iter"].append(self._iter)
         self.loss_info["window"].append(window)
         self.loss_info["decomplen"].append(decomplen)
         self.loss_info["bclen"].append(bclen)
         self.loss_info["nsignal"].append(nsignal)
 
-        self.loss_info["cost"].append(np_loss.sum())
+        self.loss_info["cost"].append(eqv_loss)
         self.loss_info["efficiency"].append((np_eff_pred > 0.1).sum().item() / np_eff_pred.size)
         self.loss_info["performance"].append(neff_cl)
 
@@ -541,7 +543,7 @@ class OptForecast:
         self._write_csv()
         self._iter += 1
 
-        return np_loss.sum()
+        return eqv_loss
 
     def opt_trade(self, td_dsvars: np.ndarray) -> float:
 
