@@ -364,9 +364,6 @@ class DualOptForecast:
         fval = -np.asarray(list_trade_gain).sum()
         print(f"Trade gain: {fval}, Parameters: {td_dsvars}")
 
-        tt = np.asarray(list_trade_gain)
-        ti = np.asarray(list_trade_ops)
-
         return fval
 
 

@@ -7,7 +7,7 @@ import pandas as pd
 
 from tqdm import tqdm
 from joblib import load
-# from scipy.optimize import differential_evolution, direct, minimize
+from scipy.optimize import differential_evolution, direct, minimize, LinearConstraint
 from sklearn.preprocessing import MinMaxScaler
 from typing import Tuple, List, Dict, Any, Optional, Union, Callable
 
@@ -72,6 +72,7 @@ class OptForecast:
 
         # FIXME
         self._debug = debug
+        self._iter = 0
 
         self.dtype = dtype
         self.ftype = ftype
@@ -82,6 +83,18 @@ class OptForecast:
 
         self.ssa_wlen = 20  # Window length for SSA
         self._prd_dsvars = pd.Series()
+
+        # Save csv file with optimization results
+
+        ## Convert timestamp to a datetime object
+        dt_object = datetime.datetime.fromtimestamp(time.time())
+        timestamp_str = dt_object.strftime("%Y%m%d_%H%M%S")
+        dt_time = input_data.index[1] - input_data.index[0]
+        num_dt = int(dt_time.total_seconds() / 60)
+        self.csv_file_info = (project_local_path / f"opt_ifo_{dtype}_dt_{num_dt}_forlen_{out_len}_rsize_{run_size}_{timestamp_str}.csv")
+
+        self.loss_info = {"iter": [], "window": [], "decomplen": [], "bclen": [], "nsignal": [],
+                          "cost": [], "efficiency": [], "performance": [],}
 
         # Forecast Model and function
         self._model = None
@@ -170,7 +183,7 @@ class OptForecast:
         """
         try:
             if not self._debug:
-                model_file_path = (Path(__file__).parent.parent.parent / "model" / "model.ckpt.bck").resolve()
+                model_file_path = (Path(__file__).parent.parent.parent / "model" / "model.ckpt").resolve()
                 self._model: ForecastModel = load_model(str(model_file_path))
                 self._forecast = self._model.forecast
             else:
@@ -323,6 +336,11 @@ class OptForecast:
         else:
             raise NotImplementedError(f"Unsupported rescaling with shape: {pd_signal.shape[1]}.")
 
+    def _write_csv(self):
+        if self._iter % 5 == 0 and self._iter > 0:
+            df_opt_info = pd.DataFrame(self.loss_info)
+            df_opt_info.to_csv(self.csv_file_info, index=False)
+
     def objective(self, dsvars: pd.Series) -> Dict[str, np.ndarray]:
         """
         Compute objective metrics for a set of design variables.
@@ -433,6 +451,97 @@ class OptForecast:
                 "reference": list_dy_ref,
                 "forecast": list_y_prd,
                 }
+
+    def objective_scipy(self, dsvars: np.ndarray) -> float:
+        """
+        Compute objective metrics for a set of design variables.
+
+        Args:
+            dsvars (pd.Series): Series containing 'window', 'decomplen', 'bclen', 'nsignal'.
+
+        Returns:
+            Dict[str, np.ndarray]: Dictionary with metrics:
+                'lsq': least-squares errors,
+                'efficiency': efficiency ratios,
+                'performance': performance score,
+                'dy_ref': reference slopes,
+                'dy_prd': predicted slopes,
+                'reference': list of reference series,
+                'forecast': list of forecast series.
+        """
+
+        # Optimization Variables
+        window = int(dsvars[0])
+        decomplen = int(dsvars[1])
+        bclen = int(dsvars[2])
+        nsignal = int(dsvars[3])
+
+        assert window > 50, f"window should be greater than 50, window is {window}"
+        assert decomplen >= window, f"decomplen should be greater or equal than window, decomplen is {decomplen}"
+        assert bclen >= 0, f"bclen should be greater or equal than 0, bclen is {bclen}"
+        assert nsignal > 3, f"nsignal should be greater than 3, nsignal is {nsignal}"
+
+        quantile = 0.5
+        decomp_idx = np.arange(0, decomplen + bclen)
+        list_loss = []
+        list_dy_ref = []
+        list_dy_prd = []
+        list_eff_pred = []
+
+        for i, idx_i in enumerate(tqdm(self.np_idx_inc_eval[:self.run_size], desc="Processing")):
+            decomp_idx_i = decomp_idx + (idx_i - decomplen)
+
+            # Input Signal (X), where Y := F(X)
+            sr_data_rs_i = self.sr_data_rs.iloc[decomp_idx_i]
+            sr_x_ft_i = self._filter(sr_data_rs_i)
+
+            # First Signal Decomposition
+            pd_signal_decomp_i = self._signal_decomposition(sr_x_ft_i, nsignal)
+
+            # Forecast the signal
+            pd_forecast_i = self._forecast_signal(pd_signal_decomp_i[-(window + bclen):],
+                                                  bclen, plot_path=None)
+
+            # Reference
+            sr_y_i = self.sr_data_rs[pd_forecast_i.index[bclen:]]
+            dy_i = (sr_y_i.values[-1] - sr_x_ft_i.values[-1]) / (sr_y_i.size + 1)
+            list_dy_ref.append(dy_i)
+
+            # Prediction
+            sr_y_prd_i = pd_forecast_i["mean"][bclen:]
+            dy_prd_i = (sr_y_prd_i.values[-1] - sr_y_prd_i.values[0]) / sr_y_prd_i.size
+            list_dy_prd.append(dy_prd_i)
+
+            y_eff_prd_i = dy_prd_i / (dy_i + 1.e-9)
+            list_eff_pred.append(y_eff_prd_i)
+
+            # Calculate LSQ cost function
+            np_diff_i = sr_y_i.values - sr_y_prd_i.values
+            list_loss.append(np.mean(np.maximum(quantile * np_diff_i, (quantile - 1) * np_diff_i)))
+
+        np_loss = np.asarray(list_loss)
+        np_eff_pred = np.asarray(list_eff_pred)
+
+        np_dy_prd_idx = np.abs(np.asarray(list_dy_prd)) > 0.002
+        np_eff_pred_cl = np_eff_pred[np_dy_prd_idx]
+        neff_cl = (np_eff_pred_cl > 0.).sum() / np_eff_pred_cl.size
+
+        self.loss_info["iter"].append(self._iter)
+        self.loss_info["window"].append(window)
+        self.loss_info["decomplen"].append(decomplen)
+        self.loss_info["bclen"].append(bclen)
+        self.loss_info["nsignal"].append(nsignal)
+
+        self.loss_info["cost"].append(np_loss.sum())
+        self.loss_info["efficiency"].append((np_eff_pred > 0.1).sum().item() / np_eff_pred.size)
+        self.loss_info["performance"].append(neff_cl)
+
+        print(f" >>> Iter.: {self._iter}, Processing DSVARS: {dsvars}, LSQ Value: {np_loss.sum()}, Performance: {neff_cl}")
+
+        self._write_csv()
+        self._iter += 1
+
+        return np_loss.sum()
 
     def opt_trade(self, td_dsvars: np.ndarray) -> float:
 
@@ -602,7 +711,7 @@ def get_design_sample(seed: int = 42) -> np.ndarray:
     return pd_dsvars.iloc[np_dsvars_idx, :]
 
 
-def main_opt_forecast():
+def main_search_forecast():
 
     input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
     dict_price_data = load(input_data_path)
@@ -662,6 +771,67 @@ def main_opt_forecast():
         if i % 5 == 0 and i > 0:
             df_opt_info = pd.DataFrame(list_output)
             df_opt_info.to_csv(opt_file_info, index=False)
+
+
+def main_opt_forecast():
+
+    input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
+    dict_price_data = load(input_data_path)
+    dt = 15
+    out_len = 12
+
+    # dt = 60
+    # out_len = 8
+
+    seed = 42
+    # dtype = "ewt"
+    # dtype = "xwt"
+    dtype = "swt"
+    # dtype = "emd"
+    # dtype = "ssa"
+
+    run_size = 30
+    # run_size = 100
+    # run_size = 200
+    opt_ewt_forecst = OptForecast(input_data=dict_price_data[dt],
+                                  out_len=out_len,
+                                  inc_len=50,
+                                  plt_len=120,
+                                  seed=seed,
+                                  dtype=dtype,
+                                  ftype="",
+                                  # plot_flag=True,
+                                  run_size=run_size,
+                                  )
+
+    np_dsvars = np.asarray([1600, 1900, 3, 6])
+    res_i = opt_ewt_forecst.objective_scipy(np_dsvars)
+
+    # Define the bounds for each variable
+    bounds = [(100, 2000), (500, 5000), (0, 10), (4, 20)]
+    integrality = [True, True, True, True]
+
+    # Define the linear constraint: x2 - x1 >= 100
+    A = [[-1, 1, 0, 0]]  # Coefficients for x1 and x2
+    b = [100]  # Lower bound for the inequality
+
+    # Create the linear constraint
+    constraint = LinearConstraint(A, lb=b, ub=np.inf)
+
+    # Run the differential evolution solver
+    result = differential_evolution(
+        opt_ewt_forecst.objective_scipy,
+        bounds,
+        x0=np_dsvars,
+        constraints=constraint,
+        integrality=integrality,
+        seed=42
+    )
+
+    print("Optimal solution:", result.x)
+    print("Optimal value:", result.fun)
+
+    test = 1.
 
 
 def main_opt_trade():
@@ -732,5 +902,6 @@ def main_opt_trade():
 
 
 if __name__ == "__main__":
-    # main_opt_forecast()
-    main_opt_trade()
+    # main_search_forecast()
+    main_opt_forecast()
+    # main_opt_trade()
