@@ -7,7 +7,7 @@ import pandas as pd
 
 from tqdm import tqdm
 from joblib import load
-from scipy.optimize import differential_evolution, direct, minimize
+# from scipy.optimize import differential_evolution, direct, minimize
 from sklearn.preprocessing import MinMaxScaler
 from typing import Tuple, List, Dict, Any, Optional, Union, Callable
 

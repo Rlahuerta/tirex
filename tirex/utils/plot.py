@@ -476,3 +476,106 @@ def plot_mpl_ticker(input_tickers: pd.DataFrame,
         plt.close(fig)
     else:
         return fig, ax
+
+
+def dual_plot_mpl_ticker(input_tickers: pd.DataFrame,
+                         forward_tickers: pd.DataFrame = None,
+                         dt15_output_tickers: pd.DataFrame = None,
+                         dt60_output_tickers: pd.DataFrame = None,
+                         plot_name: str = None,
+                         close: bool = True,
+                         dpi: int = 800,
+                         **kwargs,
+                         ):
+
+    # Assuming `tickers_data` is indexed by date and contains open, high, low, close columns
+    fig, ax = plt.subplots(figsize=(24, 8))
+    fig.suptitle('Asset Price and Overlays', fontsize=12)
+
+    time_increment = int(input_tickers.index.to_series().diff().mean().total_seconds() / 60)
+
+    # Plotting candlesticks
+    _add_candlestick(ax, input_tickers, dt=time_increment)
+    ax.axvline(input_tickers['close'].index[-1], color='red', linestyle='--')
+
+    if 'swt15' in kwargs.keys():
+        ax.plot(kwargs['swt15'].index, kwargs['swt15'].values, color='orange', label='SWT (15 min)', linewidth=1.)
+
+    if 'swt60' in kwargs.keys():
+        ax.plot(kwargs['swt60'].index, kwargs['swt60'].values, linestyle=':', color='black', label='SWT (60 min)', linewidth=1.)
+
+    # Prediction and other overlays
+    if isinstance(forward_tickers, pd.DataFrame):
+        _add_candlestick(ax, forward_tickers[['open', 'close', 'high', 'low']], dt=time_increment)
+
+    # Prediction and other overlays
+    if dt15_output_tickers is not None:
+        if 'poly2' in dt15_output_tickers.keys():
+            ax.plot(dt15_output_tickers['poly2'].index, dt15_output_tickers['poly2'].values,
+                    color='purple', label='Reg-Poly2 (15 min)', linewidth=2, linestyle="-.")
+
+        if 'mean' in dt15_output_tickers.keys():
+            ax.plot(dt15_output_tickers['mean'].index, dt15_output_tickers['mean'].values,
+                    color='darkgreen', label='Pred-Mean (15 min)', linewidth=2, linestyle="-.")
+
+        if any('quantile' in key for key in dt15_output_tickers.keys()):
+            quantile_lower_bound = dt15_output_tickers.iloc[:, 0]
+            quantile_upper_bound = dt15_output_tickers.iloc[:, 8]
+
+            ax.fill_between(
+                dt15_output_tickers.index, quantile_lower_bound.values, quantile_upper_bound.values,
+                color="#d94e4e", alpha=0.1, label="Forecast 10% - 90% Quantiles (15 min)"
+            )
+
+    if dt60_output_tickers is not None:
+        if 'poly2' in dt60_output_tickers.keys():
+            ax.plot(dt60_output_tickers['poly2'].index, dt60_output_tickers['poly2'].values,
+                    color='purple', label='Reg-Poly2 (60 min)', linewidth=3, linestyle=":")
+
+        if 'mean' in dt60_output_tickers.keys():
+            ax.plot(dt60_output_tickers['mean'].index, dt60_output_tickers['mean'].values,
+                    color='darkgreen', label='Pred-Mean (60 min)', linewidth=3, linestyle=":")
+
+        if any('quantile' in key for key in dt60_output_tickers.keys()):
+            quantile_lower_bound = dt60_output_tickers.iloc[:, 0]
+            quantile_upper_bound = dt60_output_tickers.iloc[:, 8]
+
+            ax.fill_between(
+                dt60_output_tickers.index, quantile_lower_bound.values, quantile_upper_bound.values,
+                color="royalblue", alpha=0.1, label="Forecast 10% - 90% Quantiles (60 min)"
+            )
+
+    # Formatting the x-axis as dates
+    ax.xaxis_date()
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %H:%M'))
+
+    if time_increment == 60:
+        ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+        ax.xaxis.set_minor_locator(mdates.HourLocator(interval=4))
+    elif time_increment == 15:
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=6))
+        ax.xaxis.set_minor_locator(mdates.HourLocator(interval=1))
+    else:
+        raise NotImplementedError
+
+    plt.setp(ax.get_xticklabels(), rotation=45)
+
+    # Titles and labels
+    ax.set_xlabel(f"Date - {input_tickers.index[-1].strftime('%B')}/{input_tickers.index[-1].year}")
+    ax.set_ylabel('Price')
+
+    ax.grid(which='minor', alpha=0.2, axis='x')
+    ax.grid(which='minor', alpha=0.2)
+    ax.grid(which='major', alpha=0.5)
+
+    # Legend
+    plt.legend()
+    # plt.show()
+
+    if plot_name is not None:
+        fig.savefig(plot_name, dpi=dpi)
+
+    if close:
+        plt.close(fig)
+    else:
+        return fig, ax

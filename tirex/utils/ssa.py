@@ -42,7 +42,7 @@ def ssa(input_signal: np.ndarray,
     k = input_signal.size - wlen + 1
     trajectory_matrix = np.zeros((wlen, k))
     for i in range(k):
-        trajectory_matrix[:, i] = input_signal.iloc[i:i + wlen]
+        trajectory_matrix[:, i] = input_signal[i:i + wlen]
 
     # Step 2: SVD
     ut, sigma, vt = svd(trajectory_matrix)
