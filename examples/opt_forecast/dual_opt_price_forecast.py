@@ -381,19 +381,17 @@ def main_opt_trade():
     run_size = 300
 
     # dt 15
-    # sr_opt_forecast = pd.Series(dict(window=1600, decomplen=1900, bclen=3, nsignal=6))
+    # sr_opt15_forecast = pd.Series(dict(window=1600, decomplen=1900, bclen=3, nsignal=6, outlen=12), name=15)
+    # sr_opt15_forecast = pd.Series(dict(window=1300, decomplen=4700, bclen=3, nsignal=11, outlen=12), name=15)     # *
+    sr_opt15_forecast = pd.Series(dict(window=1300, decomplen=4700, bclen=3, nsignal=11, outlen=12), name=15)  # *
+    sr_opt15_forecast = pd.Series(dict(window=190, decomplen=2636, bclen=3, nsignal=5, outlen=12), name=15)
 
     # dt 60
-    # sr_opt_forecast = pd.Series(dict(window=200, decomplen=600, bclen=1, nsignal=8))
-    # sr_opt_forecast = pd.Series(dict(window=700, decomplen=5200, bclen=4, nsignal=7))
+    # sr_opt60_forecast = pd.Series(dict(window=200, decomplen=600, bclen=1, nsignal=8, outlen=8), name=15)
+    # sr_opt60_forecast = pd.Series(dict(window=700, decomplen=5200, bclen=4, nsignal=7, outlen=8), name=15)
+    sr_opt60_forecast = pd.Series(dict(window=300, decomplen=600, bclen=1, nsignal=14, outlen=8), name=60)
 
-    pd_opt_forecast = pd.DataFrame(dict(window=[1300, 300],
-                                        decomplen=[4700, 600],
-                                        bclen=[3, 1],
-                                        nsignal=[11, 14],
-                                        outlen=[12, 8],
-                                        ),
-                                   index=[15, 60])
+    pd_opt_forecast = pd.concat([sr_opt15_forecast, sr_opt60_forecast], axis=1).T
 
     opt_ewt_forecst = DualOptForecast(input_data=dict_price_data[dt],
                                       opt_dsvars=pd_opt_forecast,

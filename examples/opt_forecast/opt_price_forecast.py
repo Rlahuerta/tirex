@@ -526,7 +526,7 @@ class OptForecast:
         np_eff_pred_cl = np_eff_pred[np_dy_prd_idx]
         neff_cl = (np_eff_pred_cl > 0.).sum() / np_eff_pred_cl.size
 
-        eqv_loss = np_loss.sum() / 10 + neff_cl
+        eqv_loss = np_loss.sum() / 10. - neff_cl
 
         self.loss_info["iter"].append(self._iter)
         self.loss_info["window"].append(window)
@@ -538,7 +538,7 @@ class OptForecast:
         self.loss_info["efficiency"].append((np_eff_pred > 0.1).sum().item() / np_eff_pred.size)
         self.loss_info["performance"].append(neff_cl)
 
-        print(f" >>> Iter.: {self._iter}, Processing DSVARS: {dsvars}, LSQ Value: {np_loss.sum()}, Performance: {neff_cl}")
+        print(f" >>> Iter.: {self._iter}, Processing DSVARS: {dsvars}, LSQ Value: {eqv_loss}, Performance: {neff_cl}")
 
         self._write_csv()
         self._iter += 1
@@ -779,11 +779,11 @@ def main_opt_forecast():
 
     input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
     dict_price_data = load(input_data_path)
-    dt = 15
-    out_len = 12
+    # dt = 15
+    # out_len = 12
 
-    # dt = 60
-    # out_len = 8
+    dt = 60
+    out_len = 8
 
     seed = 42
     # dtype = "ewt"
@@ -792,8 +792,8 @@ def main_opt_forecast():
     # dtype = "emd"
     # dtype = "ssa"
 
-    run_size = 30
-    # run_size = 100
+    # run_size = 30
+    run_size = 100
     # run_size = 200
     opt_ewt_forecst = OptForecast(input_data=dict_price_data[dt],
                                   out_len=out_len,
@@ -806,11 +806,13 @@ def main_opt_forecast():
                                   run_size=run_size,
                                   )
 
-    np_dsvars = np.asarray([1600, 1900, 3, 6])
-    res_i = opt_ewt_forecst.objective_scipy(np_dsvars)
+    # np_dsvars = np.asarray([1600, 1900, 3, 6])      # dt15
+    np_dsvars = np.asarray([300, 600, 1, 14])      # dt60
+    # res_i = opt_ewt_forecst.objective_scipy(np_dsvars)
 
     # Define the bounds for each variable
-    bounds = [(100, 2000), (500, 5000), (0, 10), (4, 20)]
+    # bounds = [(100, 2000), (500, 5000), (0, 10), (4, 20)]     # dt15
+    bounds = [(100, 1500), (100, 1500), (0, 10), (4, 20)]     # dt60
     integrality = [True, True, True, True]
 
     # Define the linear constraint: x2 - x1 >= 100
@@ -827,13 +829,16 @@ def main_opt_forecast():
         x0=np_dsvars,
         constraints=constraint,
         integrality=integrality,
+        strategy='best1bin',        # A robust and commonly used strategy
+        maxiter=1000,               # Maximum number of iterations
+        popsize=15,                 # Population size (5-10 times the number of dimensions)
+        recombination=0.7,          # Recombination probability
+        init='latinhypercube',      # Initialization method for better space coverage
         seed=42
     )
 
     print("Optimal solution:", result.x)
     print("Optimal value:", result.fun)
-
-    test = 1.
 
 
 def main_opt_trade():
