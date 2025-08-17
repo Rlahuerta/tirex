@@ -834,7 +834,8 @@ def main_opt_forecast():
         popsize=15,                 # Population size (5-10 times the number of dimensions)
         recombination=0.7,          # Recombination probability
         init='latinhypercube',      # Initialization method for better space coverage
-        seed=42
+        seed=42,
+        disp=True,
     )
 
     print("Optimal solution:", result.x)

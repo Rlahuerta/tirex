@@ -266,17 +266,36 @@ class DualOptForecast:
         else:
             raise NotImplementedError(f"Unsupported rescaling with shape: {pd_signal.shape[1]}.")
 
+    def _get_input_signals(self, dt15_index: np.ndarray, dt60_index: np.ndarray) -> Dict[int, pd.Series]:
+        """
+        Get the input signals for the 15-minute and 60-minute timeframes.
+
+        Args:
+            dt15_index (np.ndarray): Indices for the 15-minute timeframe.
+
+        Returns:
+            Tuple[pd.Series, pd.Series]: Input signals for 15-minute and 60-minute timeframes.
+        """
+        sr_dt15_x = self.sr_data_rs.iloc[dt15_index]
+        index_dt60_x = self.sr_data_rs.index[dt60_index]
+
+        # index_dt60_x += sr_dt15_x.index[-1] - index_dt60_x[-1]
+        index_dt60_x += sr_dt15_x.index[-1] - index_dt60_x[-1] - pd.to_timedelta(1, unit='h')
+
+        sr_dt60_x = self.sr_data_rs.loc[index_dt60_x]
+
+        return {15: sr_dt15_x, 60: sr_dt60_x}
+
     def opt_trade(self, td_dsvars: np.ndarray) -> float:
 
         local_obj_plot_path = (project_local_path / f"{self.dtype}_plots").resolve()
         local_obj_plot_path.mkdir(exist_ok=True)
         local_plot_path_i = None
 
-        dt15_time = self.sr_data_rs.index[1] - self.sr_data_rs.index[0]
-        # dt60_time = self.sr_data_rs.index[4] - self.sr_data_rs.index[0]
-
         dt15_bclen = self.opt_dsvars.loc[15, "bclen"].item()
         dt60_bclen = self.opt_dsvars.loc[60, "bclen"].item()
+
+        dt15_time = self.sr_data_rs.index[1] - self.sr_data_rs.index[0]
 
         dt15_decomp_idx = np.arange(0, self.opt_dsvars.loc[15, ["decomplen", "bclen"]].sum().item())
         dt60_decomp_idx = np.arange(0, 4 * self.opt_dsvars.loc[60, ["decomplen", "bclen"]].sum().item())
@@ -288,11 +307,8 @@ class DualOptForecast:
         for i, idx_i in enumerate(tqdm(self.np_idx_inc_eval[:self.run_size], desc="Processing")):
             dt15_decomp_idx_i = dt15_decomp_idx + (idx_i - self.opt_dsvars.loc[15, "decomplen"].item())
             dt60_decomp_idx_i = (dt60_decomp_idx + (idx_i - 4 * self.opt_dsvars.loc[60, "decomplen"].item()))[dt15_to_dt60]
-            dt60_decomp_idx_i -= dt60_decomp_idx_i[-1] - dt15_decomp_idx_i[-1] + 4
 
-            # Input Signal (X), where Y := F(X)
-            sr_dt15_x_ft_i = self.sr_data_rs.iloc[dt15_decomp_idx_i]
-            sr_dt60_x_ft_i = self.sr_data_rs.iloc[dt60_decomp_idx_i]
+            dtm_x_i = self._get_input_signals(dt15_decomp_idx_i, dt60_decomp_idx_i)
 
             if self.plot_flag:
                 local_plot_path_i = (local_obj_plot_path / f"trial_{i}").resolve()
@@ -301,33 +317,48 @@ class DualOptForecast:
                 else:
                     cleanup_directory(local_plot_path_i)
 
-            # First Signal Decomposition
-            pd_dt15_signal_decomp_i = self._signal_decomposition(sr_dt15_x_ft_i, self.opt_dsvars.loc[15, "nsignal"].item())
-            pd_dt60_signal_decomp_i = self._signal_decomposition(sr_dt60_x_ft_i, self.opt_dsvars.loc[60, "nsignal"].item())
+            dict_signal_process_i = dict()
+            for dt_k, sr_x_dt_k in dtm_x_i.items():
+                # First Signal Decomposition
+                pd_signal_decomp_k = self._signal_decomposition(sr_x_dt_k, self.opt_dsvars.loc[dt_k, "nsignal"].item())
+                sr_signal_sum_k = pd_signal_decomp_k.iloc[self.opt_dsvars.loc[dt_k, "bclen"].item():, :].sum(axis=1)
 
-            # Forecast the signal
-            dt15_bc_win_i = self.opt_dsvars.loc[15, ["window", "bclen"]].sum().item()
-            dt60_bc_win_i = self.opt_dsvars.loc[60, ["window", "bclen"]].sum().item()
+                bc_win_k = self.opt_dsvars.loc[dt_k, ["window", "bclen"]].sum().item()
 
-            pd_dt15_forecast_i = self._forecast_signal(pd_dt15_signal_decomp_i[-dt15_bc_win_i:],
-                                                       out_len=self.opt_dsvars.loc[15, "outlen"].item(),
-                                                       bclen=dt15_bclen,
-                                                       plot_path=local_plot_path_i)
+                # Forecast the signal
+                pd_forecast_k = self._forecast_signal(pd_signal_decomp_k[-bc_win_k:],
+                                                      out_len=self.opt_dsvars.loc[dt_k, "outlen"].item(),
+                                                      bclen=self.opt_dsvars.loc[dt_k, "bclen"].item(),
+                                                      plot_path=local_plot_path_i)
 
-            pd_dt60_forecast_i = self._forecast_signal(pd_dt60_signal_decomp_i[-dt60_bc_win_i:],
-                                                       out_len=self.opt_dsvars.loc[60, "outlen"].item(),
-                                                       bclen=dt60_bclen,
-                                                       plot_path=local_plot_path_i)
+                # Trade Parameters
+                dy0_k = pd_forecast_k["mean"].iloc[0].item() - sr_x_dt_k.iloc[-1].item()
+                dy1_k = pd_forecast_k["mean"].iloc[-1].item() - pd_forecast_k["mean"].iloc[0].item()
+
+                min_mean_val_k = (pd_forecast_k["mean"] - pd_forecast_k["mean"].iloc[0].item()).min().item()
+                max_mean_val_k = (pd_forecast_k["mean"] - pd_forecast_k["mean"].iloc[0].item()).max().item()
+
+                if min_mean_val_k < 0. and min_mean_val_k < dy1_k:
+                    dyf_k = min_mean_val_k
+                elif max_mean_val_k > 0. and max_mean_val_k > dy1_k:
+                    dyf_k = max_mean_val_k
+                else:
+                    dyf_k = (pd_forecast_k["mean"] - pd_forecast_k["mean"].iloc[0].item()).mean().item()
+
+                # Store Values
+                dict_signal_process_i[dt_k] = dict(signal_decomp=pd_signal_decomp_k,
+                                                   signal_sum=sr_signal_sum_k,
+                                                   bc_win=bc_win_k,
+                                                   forecast=pd_forecast_k - dy0_k,
+                                                   dy0=dy0_k,
+                                                   dy1=dy1_k,
+                                                   dym=dyf_k,
+                                                   )
 
             ## Reference (Future Values)
-            end_dt15_i = pd_dt15_forecast_i.index[dt15_bclen:][0] - dt15_time
-            # end_dt60_i = pd_dt60_forecast_i.index[dt60_bclen:][0] - dt60_time
+            end_dt15_i = dict_signal_process_i[15]["forecast"].index[dt15_bclen:][0] - dt15_time
 
             list_dt15_output_idx_i = create_time_index(dt15_time, end_dt15_i, 160)
-            # list_dt60_output_idx_i = create_time_index(dt60_time, end_dt60_i, 40)
-
-            # Future Values
-            ## Prediction
 
             # TODO: Calculate A-B-C for the prediction
             # trailing order parameter
@@ -336,21 +367,21 @@ class DualOptForecast:
             if self.plot_flag:
                 # plot the trade operation
                 file_path_i = f'{local_plot_path_i}/dual_forecast.png'
-                df_inp_tickers_i = self.input_data.loc[sr_dt15_x_ft_i.index[-self.plt_len:], ['open', 'close', 'high', 'low']]
+                df_inp_tickers_i = self.input_data.loc[dtm_x_i[15].index[-self.plt_len:], ['open', 'close', 'high', 'low']]
                 df_inp_tickers_rs_i = self._rescaling(df_inp_tickers_i)
 
                 ## Real
                 df_dt15_y_i = self.input_data.loc[list_dt15_output_idx_i, ['open', 'close', 'high', 'low']]
                 df_dt15_y_rs_i = self._rescaling(df_dt15_y_i)
 
-                sr_dt15_y_signal_decomp_sum_i = pd_dt15_signal_decomp_i.iloc[dt15_bclen:, :].sum(axis=1)[-self.plt_len:]
-                sr_dt60_y_signal_decomp_sum_i = pd_dt60_signal_decomp_i.iloc[dt60_bclen:, :].sum(axis=1)[-(self.plt_len // 4):]
+                sr_dt15_y_signal_decomp_sum_i = dict_signal_process_i[15]["signal_sum"][-self.plt_len:]
+                sr_dt60_y_signal_decomp_sum_i = dict_signal_process_i[60]["signal_sum"][-(self.plt_len // 4):]
 
                 pkwargs = dict(forward_tickers=df_dt15_y_rs_i,
                                swt15=sr_dt15_y_signal_decomp_sum_i,
                                swt60=sr_dt60_y_signal_decomp_sum_i,
-                               dt15_output_tickers=pd_dt15_forecast_i.iloc[dt15_bclen:, :],
-                               dt60_output_tickers=pd_dt60_forecast_i.iloc[dt60_bclen:, :],
+                               dt15_output_tickers=dict_signal_process_i[15]["forecast"].iloc[dt15_bclen:, :],
+                               dt60_output_tickers=dict_signal_process_i[60]["forecast"].iloc[dt60_bclen:, :],
                                plot_name=file_path_i,
                                dpi=500,
                                )

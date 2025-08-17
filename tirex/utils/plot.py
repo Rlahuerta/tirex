@@ -510,13 +510,9 @@ def dual_plot_mpl_ticker(input_tickers: pd.DataFrame,
 
     # Prediction and other overlays
     if dt15_output_tickers is not None:
-        if 'poly2' in dt15_output_tickers.keys():
-            ax.plot(dt15_output_tickers['poly2'].index, dt15_output_tickers['poly2'].values,
-                    color='purple', label='Reg-Poly2 (15 min)', linewidth=2, linestyle="-.")
-
         if 'mean' in dt15_output_tickers.keys():
             ax.plot(dt15_output_tickers['mean'].index, dt15_output_tickers['mean'].values,
-                    color='darkgreen', label='Pred-Mean (15 min)', linewidth=2, linestyle="-.")
+                    color='purple', label='Pred-Mean (15 min)', linewidth=2, linestyle="-.")
 
         if any('quantile' in key for key in dt15_output_tickers.keys()):
             quantile_lower_bound = dt15_output_tickers.iloc[:, 0]
@@ -528,13 +524,9 @@ def dual_plot_mpl_ticker(input_tickers: pd.DataFrame,
             )
 
     if dt60_output_tickers is not None:
-        if 'poly2' in dt60_output_tickers.keys():
-            ax.plot(dt60_output_tickers['poly2'].index, dt60_output_tickers['poly2'].values,
-                    color='purple', label='Reg-Poly2 (60 min)', linewidth=3, linestyle=":")
-
         if 'mean' in dt60_output_tickers.keys():
             ax.plot(dt60_output_tickers['mean'].index, dt60_output_tickers['mean'].values,
-                    color='darkgreen', label='Pred-Mean (60 min)', linewidth=3, linestyle=":")
+                    color='purple', label='Pred-Mean (60 min)', linewidth=3, linestyle=":")
 
         if any('quantile' in key for key in dt60_output_tickers.keys()):
             quantile_lower_bound = dt60_output_tickers.iloc[:, 0]
