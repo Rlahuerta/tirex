@@ -48,12 +48,11 @@ def ssa(input_signal: np.ndarray,
     ut, sigma, vt = svd(trajectory_matrix)
 
     # Step 3: Grouping and Reconstruction
-    component_indices = range(nsignal)  # Adjust based on how many components you expect
     reconstructed_components = []
 
-    for idx in component_indices:
-        component = ut[:, idx:idx + 1] @ np.diag(sigma[idx:idx + 1]) @ vt[idx:idx + 1, :]
-        reconstructed_component = diagonal_averaging(component)
+    for idx_i in range(nsignal):
+        component_i = ut[:, idx_i:idx_i + 1] @ np.diag(sigma[idx_i:idx_i + 1]) @ vt[idx_i:idx_i + 1, :]
+        reconstructed_component = diagonal_averaging(component_i)
         reconstructed_components.append(reconstructed_component)
 
     return np.asarray(reconstructed_components).T

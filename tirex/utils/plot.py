@@ -537,6 +537,19 @@ def dual_plot_mpl_ticker(input_tickers: pd.DataFrame,
                 color="royalblue", alpha=0.1, label="Forecast 10% - 90% Quantiles (60 min)"
             )
 
+    if 'support' in kwargs.keys():
+        ax.plot(kwargs['support'].index, kwargs['support'].values, "o",
+                markersize=5, alpha=0.5, color='black', label='Support Lvl')
+
+    if 'trade_bounds' in kwargs.keys():
+        if 'stop_loss' in kwargs['trade_bounds'].keys():
+            ax.plot(kwargs['trade_bounds'].index, kwargs['trade_bounds']['stop_loss'].values,
+                    color='red', alpha=0.4, label='Stop Loss', linewidth=2, linestyle="--")
+
+        if 'take_profit' in kwargs['trade_bounds'].keys():
+            ax.plot(kwargs['trade_bounds'].index, kwargs['trade_bounds']['take_profit'].values,
+                    color='blue', alpha=0.4, label='Take Profit', linewidth=2, linestyle="--")
+
     # Formatting the x-axis as dates
     ax.xaxis_date()
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %H:%M'))

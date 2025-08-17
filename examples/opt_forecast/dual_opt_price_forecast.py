@@ -278,13 +278,75 @@ class DualOptForecast:
         """
         sr_dt15_x = self.sr_data_rs.iloc[dt15_index]
         index_dt60_x = self.sr_data_rs.index[dt60_index]
-
-        # index_dt60_x += sr_dt15_x.index[-1] - index_dt60_x[-1]
-        index_dt60_x += sr_dt15_x.index[-1] - index_dt60_x[-1] - pd.to_timedelta(1, unit='h')
+        index_dt60_x += sr_dt15_x.index[-1] - index_dt60_x[-1]
 
         sr_dt60_x = self.sr_data_rs.loc[index_dt60_x]
 
         return {15: sr_dt15_x, 60: sr_dt60_x}
+
+    def _get_support_points(self, signal: pd.Series) -> pd.Series:
+
+        np_signal_ssa = ssa(signal.values, 2, wlen=8)
+        np_signal_diff = np.diff(np_signal_ssa.sum(axis=1))
+
+        list_idx = []
+        for i, val_i in enumerate(np_signal_diff):
+            if i > 0:
+                if np.sign(val_i) != np.sign(np_signal_diff[i-1]):
+                    list_idx.append(i - 1)
+
+        np_support_idx = np.asarray(list_idx)
+        min_idx = np_signal_ssa.shape[0] - self.plt_len
+        plt_chk = min_idx <= np_support_idx
+
+        return signal.iloc[np_support_idx[plt_chk]]
+
+    def _processing_signals(self, dtm_x: Dict[int, pd.Series], plot_path: str = None) -> Dict[int, Dict[str, Any]]:
+
+        signal_process = dict()
+        for dt_k, sr_x_dt_k in dtm_x.items():
+
+            # First Signal Decomposition
+            pd_signal_decomp_k = self._signal_decomposition(sr_x_dt_k, self.opt_dsvars.loc[dt_k, "nsignal"].item())
+            sr_signal_sum_k = pd_signal_decomp_k.iloc[self.opt_dsvars.loc[dt_k, "bclen"].item():, :].sum(axis=1)
+
+            bc_win_k = self.opt_dsvars.loc[dt_k, ["window", "bclen"]].sum().item()
+
+            # Forecast the signal
+            pd_forecast_k = self._forecast_signal(pd_signal_decomp_k[-bc_win_k:],
+                                                  out_len=self.opt_dsvars.loc[dt_k, "outlen"].item(),
+                                                  bclen=self.opt_dsvars.loc[dt_k, "bclen"].item(),
+                                                  plot_path=plot_path)
+
+            if dt_k == 60:
+                pd_forecast_k.index -= pd.Timedelta(minutes=45)
+
+            # Trade Parameters
+            dy0_k = pd_forecast_k["mean"].iloc[0].item() - sr_x_dt_k.iloc[-1].item()
+            dy1_k = pd_forecast_k["mean"].iloc[-1].item() - pd_forecast_k["mean"].iloc[0].item()
+
+            min_mean_val_k = (pd_forecast_k["mean"] - pd_forecast_k["mean"].iloc[0].item()).min().item()
+            max_mean_val_k = (pd_forecast_k["mean"] - pd_forecast_k["mean"].iloc[0].item()).max().item()
+
+            if min_mean_val_k < 0. and min_mean_val_k < dy1_k:
+                dyf_k = min_mean_val_k
+            elif max_mean_val_k > 0. and max_mean_val_k > dy1_k:
+                dyf_k = max_mean_val_k
+            else:
+                dyf_k = (pd_forecast_k["mean"] - pd_forecast_k["mean"].iloc[0].item()).mean().item()
+
+            # Store Values
+            signal_process[dt_k] = dict(signal_decomp=pd_signal_decomp_k,
+                                               signal_sum=sr_signal_sum_k,
+                                               bc_win=bc_win_k,
+                                               forecast=pd_forecast_k,
+                                               dy0=dy0_k,
+                                               dy1=dy1_k,
+                                               dym=dyf_k,
+                                               )
+
+        # FIXME: forecast correction using dt15 latest value
+        return signal_process
 
     def opt_trade(self, td_dsvars: np.ndarray) -> float:
 
@@ -308,8 +370,6 @@ class DualOptForecast:
             dt15_decomp_idx_i = dt15_decomp_idx + (idx_i - self.opt_dsvars.loc[15, "decomplen"].item())
             dt60_decomp_idx_i = (dt60_decomp_idx + (idx_i - 4 * self.opt_dsvars.loc[60, "decomplen"].item()))[dt15_to_dt60]
 
-            dtm_x_i = self._get_input_signals(dt15_decomp_idx_i, dt60_decomp_idx_i)
-
             if self.plot_flag:
                 local_plot_path_i = (local_obj_plot_path / f"trial_{i}").resolve()
                 if not local_plot_path_i.is_dir():
@@ -317,53 +377,48 @@ class DualOptForecast:
                 else:
                     cleanup_directory(local_plot_path_i)
 
-            dict_signal_process_i = dict()
-            for dt_k, sr_x_dt_k in dtm_x_i.items():
-                # First Signal Decomposition
-                pd_signal_decomp_k = self._signal_decomposition(sr_x_dt_k, self.opt_dsvars.loc[dt_k, "nsignal"].item())
-                sr_signal_sum_k = pd_signal_decomp_k.iloc[self.opt_dsvars.loc[dt_k, "bclen"].item():, :].sum(axis=1)
+            # Get inputs (X) from 15 and 60 minutes tickers
+            dtm_x_i = self._get_input_signals(dt15_decomp_idx_i, dt60_decomp_idx_i)
 
-                bc_win_k = self.opt_dsvars.loc[dt_k, ["window", "bclen"]].sum().item()
+            # Decompose and process the signals, where Y =: F(X)
+            dict_signal_process_i = self._processing_signals(dtm_x_i, plot_path=local_plot_path_i)
 
-                # Forecast the signal
-                pd_forecast_k = self._forecast_signal(pd_signal_decomp_k[-bc_win_k:],
-                                                      out_len=self.opt_dsvars.loc[dt_k, "outlen"].item(),
-                                                      bclen=self.opt_dsvars.loc[dt_k, "bclen"].item(),
-                                                      plot_path=local_plot_path_i)
-
-                # Trade Parameters
-                dy0_k = pd_forecast_k["mean"].iloc[0].item() - sr_x_dt_k.iloc[-1].item()
-                dy1_k = pd_forecast_k["mean"].iloc[-1].item() - pd_forecast_k["mean"].iloc[0].item()
-
-                min_mean_val_k = (pd_forecast_k["mean"] - pd_forecast_k["mean"].iloc[0].item()).min().item()
-                max_mean_val_k = (pd_forecast_k["mean"] - pd_forecast_k["mean"].iloc[0].item()).max().item()
-
-                if min_mean_val_k < 0. and min_mean_val_k < dy1_k:
-                    dyf_k = min_mean_val_k
-                elif max_mean_val_k > 0. and max_mean_val_k > dy1_k:
-                    dyf_k = max_mean_val_k
-                else:
-                    dyf_k = (pd_forecast_k["mean"] - pd_forecast_k["mean"].iloc[0].item()).mean().item()
-
-                # Store Values
-                dict_signal_process_i[dt_k] = dict(signal_decomp=pd_signal_decomp_k,
-                                                   signal_sum=sr_signal_sum_k,
-                                                   bc_win=bc_win_k,
-                                                   forecast=pd_forecast_k - dy0_k,
-                                                   dy0=dy0_k,
-                                                   dy1=dy1_k,
-                                                   dym=dyf_k,
-                                                   )
+            # Get Support Points
+            sr_support_points_i = self._get_support_points(dtm_x_i[15])
 
             ## Reference (Future Values)
             end_dt15_i = dict_signal_process_i[15]["forecast"].index[dt15_bclen:][0] - dt15_time
-
             list_dt15_output_idx_i = create_time_index(dt15_time, end_dt15_i, 160)
 
+            # #############################################################################
             # TODO: Calculate A-B-C for the prediction
             # trailing order parameter
             ## tolerance parameter (to enter into the trade)
+            dx1_15_i = 100. * dict_signal_process_i[15]["dy1"] / dtm_x_i[15].iloc[-1].item()
+            dx1_60_i = 100. * dict_signal_process_i[60]["dy1"] / dtm_x_i[15].iloc[-1].item()
+            dxm_60_i = 100. * dict_signal_process_i[60]["dym"] / dtm_x_i[15].iloc[-1].item()
 
+            df_trade_bounds_i = pd.DataFrame()
+            if abs(dx1_15_i) >= 0.3 and (abs(dx1_60_i) >= 1. or abs(dxm_60_i) >= 1.):
+                list_dt15_td_output_idx_i = create_time_index(dt15_time, end_dt15_i, 64)
+                np_ones = np.ones(len(list_dt15_td_output_idx_i), dtype=float)
+
+                if dx1_15_i > 0. and (dx1_60_i >= 0. or dxm_60_i >= 0.):
+                    # Buy
+                    np_lwr_i = 0.99 * dict_signal_process_i[15]["forecast"].iloc[:, 0].min()
+                    np_upp_i = dict_signal_process_i[15]["forecast"]["mean"].iloc[-1].item()
+
+                else:
+                    # Sell
+                    np_lwr_i = 1.01 * dict_signal_process_i[15]["forecast"].iloc[:, 8].max()
+                    np_upp_i = dict_signal_process_i[15]["forecast"]["mean"].iloc[-1].item()
+
+                sr_stop_loss_i = pd.Series(np_lwr_i * np_ones, index=list_dt15_td_output_idx_i, name="stop_loss")
+                sr_take_profit_i = pd.Series(np_upp_i * np_ones, index=list_dt15_td_output_idx_i, name="take_profit")
+
+                df_trade_bounds_i = pd.concat([sr_stop_loss_i, sr_take_profit_i], axis=1)
+
+            # #############################################################################
             if self.plot_flag:
                 # plot the trade operation
                 file_path_i = f'{local_plot_path_i}/dual_forecast.png'
@@ -382,6 +437,8 @@ class DualOptForecast:
                                swt60=sr_dt60_y_signal_decomp_sum_i,
                                dt15_output_tickers=dict_signal_process_i[15]["forecast"].iloc[dt15_bclen:, :],
                                dt60_output_tickers=dict_signal_process_i[60]["forecast"].iloc[dt60_bclen:, :],
+                               trade_bounds=df_trade_bounds_i,
+                               support=sr_support_points_i,
                                plot_name=file_path_i,
                                dpi=500,
                                )
