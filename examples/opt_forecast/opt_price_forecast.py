@@ -434,7 +434,7 @@ class OptForecast:
                         real_future_values=sr_y_i,
                         decomp_sum=sr_y_decomp_sum_i[-self.plt_len:],
                         title=f"End Time: {sr_x_ft_i.index[-1]}",
-                        save_path=f'{local_plot_path_i}/ewt_signal_sum_pred.png')
+                        save_path=f'{local_plot_path_i}/signal_sum_pred.png')
 
         np_lsq = np.asarray(list_lsq)
         np_eff_pred = np.asarray(list_eff_pred)
@@ -479,7 +479,7 @@ class OptForecast:
         assert window > 50, f"window should be greater than 50, window is {window}"
         assert decomplen >= window, f"decomplen should be greater or equal than window, decomplen is {decomplen}"
         assert bclen >= 0, f"bclen should be greater or equal than 0, bclen is {bclen}"
-        assert nsignal > 3, f"nsignal should be greater than 3, nsignal is {nsignal}"
+        assert nsignal > 1, f"nsignal should be greater than 1, nsignal is {nsignal}"
 
         quantile = 0.5
         decomp_idx = np.arange(0, decomplen + bclen)
@@ -775,17 +775,15 @@ def main_search_forecast():
             df_opt_info.to_csv(opt_file_info, index=False)
 
 
-def main_opt_forecast():
+def main_opt_forecast(opt: bool = True):
 
     input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
     dict_price_data = load(input_data_path)
+    seed = 100
+
     # dt = 15
-    # out_len = 12
-
     dt = 60
-    out_len = 8
 
-    seed = 42
     # dtype = "ewt"
     # dtype = "xwt"
     dtype = "swt"
@@ -793,8 +791,23 @@ def main_opt_forecast():
     # dtype = "ssa"
 
     # run_size = 30
-    run_size = 100
+    # run_size = 100
     # run_size = 200
+    run_size = 300
+
+    if dt == 15:
+        out_len = 12
+        np_dsvars = np.asarray([1416, 4523, 3, 8])
+        bounds = [(100, 2000), (500, 5000), (0, 10), (6, 20)]  # dt15
+
+    elif dt == 60:
+        out_len = 8
+        np_dsvars = np.asarray([307, 1118, 1, 3])
+        bounds = [(100, 1500), (100, 1500), (0, 10), (2, 20)]  # dt60
+
+    else:
+        raise NotImplementedError
+
     opt_ewt_forecst = OptForecast(input_data=dict_price_data[dt],
                                   out_len=out_len,
                                   inc_len=50,
@@ -806,40 +819,38 @@ def main_opt_forecast():
                                   run_size=run_size,
                                   )
 
-    # np_dsvars = np.asarray([1600, 1900, 3, 6])      # dt15
-    np_dsvars = np.asarray([300, 600, 1, 14])      # dt60
-    # res_i = opt_ewt_forecst.objective_scipy(np_dsvars)
+    if opt:
+        # res_i = opt_ewt_forecst.objective_scipy(np_dsvars)
+        integrality = [True, True, True, True]
 
-    # Define the bounds for each variable
-    # bounds = [(100, 2000), (500, 5000), (0, 10), (4, 20)]     # dt15
-    bounds = [(100, 1500), (100, 1500), (0, 10), (4, 20)]     # dt60
-    integrality = [True, True, True, True]
+        # Define the linear constraint: x2 - x1 >= 100
+        A = [[-1, 1, 0, 0]]  # Coefficients for x1 and x2
+        b = [100]  # Lower bound for the inequality
 
-    # Define the linear constraint: x2 - x1 >= 100
-    A = [[-1, 1, 0, 0]]  # Coefficients for x1 and x2
-    b = [100]  # Lower bound for the inequality
+        # Create the linear constraint
+        constraint = LinearConstraint(A, lb=b, ub=np.inf)
 
-    # Create the linear constraint
-    constraint = LinearConstraint(A, lb=b, ub=np.inf)
+        # Run the differential evolution solver
+        result = differential_evolution(
+            opt_ewt_forecst.objective_scipy,
+            bounds,
+            x0=np_dsvars,
+            constraints=constraint,
+            integrality=integrality,
+            strategy='best1bin',        # A robust and commonly used strategy
+            maxiter=1000,               # Maximum number of iterations
+            popsize=20,                 # Population size (5-10 times the number of dimensions)
+            recombination=0.7,          # Recombination probability
+            init='latinhypercube',      # Initialization method for better space coverage
+            seed=seed,
+            disp=True,
+        )
 
-    # Run the differential evolution solver
-    result = differential_evolution(
-        opt_ewt_forecst.objective_scipy,
-        bounds,
-        x0=np_dsvars,
-        constraints=constraint,
-        integrality=integrality,
-        strategy='best1bin',        # A robust and commonly used strategy
-        maxiter=1000,               # Maximum number of iterations
-        popsize=15,                 # Population size (5-10 times the number of dimensions)
-        recombination=0.7,          # Recombination probability
-        init='latinhypercube',      # Initialization method for better space coverage
-        seed=42,
-        disp=True,
-    )
-
-    print("Optimal solution:", result.x)
-    print("Optimal value:", result.fun)
+        print("Optimal solution:", result.x)
+        print("Optimal value:", result.fun)
+        
+    else:
+        pass
 
 
 def main_opt_trade():
@@ -910,6 +921,6 @@ def main_opt_trade():
 
 
 if __name__ == "__main__":
-    # main_search_forecast()
-    main_opt_forecast()
+    main_search_forecast()
+    # main_opt_forecast()
     # main_opt_trade()
