@@ -69,8 +69,7 @@ def load_model(path: str, device: str = "cuda:0", hf_kwargs=None, ckp_kwargs=Non
     if os.path.exists(path) and path.endswith('.ckpt'):
         for model_cls in PretrainedModel.REGISTRY.values():
             try:
-                model = model_cls.from_pretrained(path, device=device, hf_kwargs=hf_kwargs, ckp_kwargs=ckp_kwargs)
-                return model
+                return model_cls.from_pretrained(path, device=device, hf_kwargs=hf_kwargs, ckp_kwargs=ckp_kwargs)
             except Exception:
                 continue
         raise ValueError(f"Could not load checkpoint file {path} with any registered model")

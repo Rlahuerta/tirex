@@ -17,6 +17,7 @@ dependencies:
   - glpk
   - pyomo~=6.9.2
   - ipopt
+  - uuid-utils
   - pip:
       - --index-url https://download.pytorch.org/whl/cu126
       - --extra-index-url https://pypi.org/simple
@@ -35,4 +36,6 @@ dependencies:
       - yfinance
       - PyWavelets
       - statsmodels
+      - python-dotenv
       - pytest
+      - pytest-cov

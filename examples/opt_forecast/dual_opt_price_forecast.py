@@ -457,9 +457,23 @@ class DualOptForecast:
 
 def main_opt_trade():
 
-    input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
-    dict_price_data = load(input_data_path)
+    # input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
+    input_data_path = (Path(__file__).parent / "data" / "btcusd_15m_2025-10-26.parquet").resolve()
     dt = 15
+    # dt = 60
+
+    if not input_data_path.is_file():
+        raise FileNotFoundError(f"Input data file not found: {input_data_path}")
+
+    if input_data_path.suffix == ".joblib":
+        dict_price_data = load(input_data_path)
+        df_price_data = dict_price_data[dt]
+
+    elif input_data_path.suffix == ".parquet":
+        df_price_data = pd.read_parquet(input_data_path)
+
+    else:
+        df_price_data = pd.DataFrame()
 
     seed = 42
     dtype = "swt"
@@ -469,19 +483,14 @@ def main_opt_trade():
     run_size = 300
 
     # dt 15
-    # sr_opt15_forecast = pd.Series(dict(window=1600, decomplen=1900, bclen=3, nsignal=6, outlen=12), name=15)
-    # sr_opt15_forecast = pd.Series(dict(window=1300, decomplen=4700, bclen=3, nsignal=11, outlen=12), name=15)     # *
-    sr_opt15_forecast = pd.Series(dict(window=1300, decomplen=4700, bclen=3, nsignal=11, outlen=12), name=15)  # *
-    sr_opt15_forecast = pd.Series(dict(window=190, decomplen=2636, bclen=3, nsignal=5, outlen=12), name=15)
+    sr_opt15_forecast = pd.Series(dict(window=334, decomplen=430, bclen=3, nsignal=13, outlen=12), name=15)
 
     # dt 60
-    # sr_opt60_forecast = pd.Series(dict(window=200, decomplen=600, bclen=1, nsignal=8, outlen=8), name=15)
-    # sr_opt60_forecast = pd.Series(dict(window=700, decomplen=5200, bclen=4, nsignal=7, outlen=8), name=15)
-    sr_opt60_forecast = pd.Series(dict(window=300, decomplen=600, bclen=1, nsignal=14, outlen=8), name=60)
+    sr_opt60_forecast = pd.Series(dict(window=328, decomplen=863, bclen=1, nsignal=3, outlen=8), name=60)
 
     pd_opt_forecast = pd.concat([sr_opt15_forecast, sr_opt60_forecast], axis=1).T
 
-    opt_ewt_forecst = DualOptForecast(input_data=dict_price_data[dt],
+    opt_ewt_forecst = DualOptForecast(input_data=df_price_data,
                                       opt_dsvars=pd_opt_forecast,
                                       inc_len=50,
                                       plt_len=120,

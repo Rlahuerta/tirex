@@ -890,7 +890,6 @@ def main_opt_trade():
 
     opt_ewt_forecst._prd_dsvars = sr_opt_forecast
 
-
     # [0]: tolerance parameter (to enter into the trade) [buy]
     # [1]: trailing stop value (percentage) [buy]
     # [2]: tolerance parameter (to enter into the trade) [sell]
@@ -898,7 +897,6 @@ def main_opt_trade():
     # np_opt_trade = np.array([0.00628666, 0.55794069, 0.78817656, 1.84162112], dtype=float)
     np_opt_trade = np.array([0.0718302, 6.62697033, 0.10341756, 7.19575578], dtype=float)
     fval = opt_ewt_forecst.opt_trade(np_opt_trade)
-
     bounds = [(0.0001, 1.), (0.0001, 10.), (0.0001, 1.), (0.0001, 10.)]
 
     # result = differential_evolution(
@@ -921,6 +919,6 @@ def main_opt_trade():
 
 
 if __name__ == "__main__":
-    main_search_forecast()
+    # main_search_forecast()
     # main_opt_forecast()
-    # main_opt_trade()
+    main_opt_trade()
