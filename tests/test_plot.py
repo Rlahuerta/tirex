@@ -5,6 +5,7 @@ import os
 from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from tirex.utils.plot import plot_fc
@@ -13,9 +14,15 @@ from tirex.utils.plot import plot_fc
 @pytest.fixture
 def sample_data():
     """Provides sample data for plotting tests."""
-    ctx = np.random.rand(50)
-    quantile_fc = np.random.rand(20, 9)
-    real_future_values = np.random.rand(20)
+    # Create proper pandas objects with datetime index
+    ctx_index = pd.date_range('2021-01-01', periods=50, freq='h')
+    ctx = pd.Series(np.random.rand(50), index=ctx_index)
+    
+    fc_index = pd.date_range('2021-01-03 02:00', periods=20, freq='h')
+    quantile_fc = pd.DataFrame(np.random.rand(20, 9), index=fc_index)
+    
+    real_future_values = pd.Series(np.random.rand(20), index=fc_index)
+    
     return ctx, quantile_fc, real_future_values
 
 

@@ -476,4 +476,6 @@ def save_ticker(dt: int = 60, size: int = 80000, hours: int = 168):
 if __name__ == '__main__':
     # Example: Fetch 24 hours of 15-minute data for testing
     # For production, increase hours parameter (e.g., 168 for 1 week, 720 for 1 month)
-    save_ticker(dt=15, hours=500)  # Just 24 hours for testing
+
+    save_ticker(dt=15, hours=40000)  # Just 24 hours for testing
+    # save_ticker(dt=60, hours=40000)   # Just 24 hours for testing

@@ -8,10 +8,439 @@ OHLCV (Open, High, Low, Close, Volume) data using vectorized NumPy operations.
 
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def validate_timestamp_continuity(
+    timestamps: pd.DatetimeIndex,
+    expected_interval: pd.Timedelta,
+    tolerance: float = 0.1
+) -> Tuple[bool, List[Tuple[pd.Timestamp, pd.Timestamp, pd.Timedelta]]]:
+    """
+    Validate that timestamps are continuous without gaps or duplicates.
+    
+    Parameters
+    ----------
+    timestamps : pd.DatetimeIndex
+        Sorted array of timestamps
+    expected_interval : pd.Timedelta
+        Expected time between consecutive data points (e.g., '1min', '5min')
+    tolerance : float, default=0.1
+        Tolerance as fraction of expected_interval (default 10%)
+        
+    Returns
+    -------
+    is_continuous : bool
+        True if data is continuous within tolerance
+    gaps : list of tuples
+        List of (timestamp_before, timestamp_after, gap_size) for each gap found
+        
+    Examples
+    --------
+    >>> timestamps = pd.date_range('2021-01-01', periods=100, freq='1min')
+    >>> is_cont, gaps = validate_timestamp_continuity(
+    ...     timestamps, pd.Timedelta(minutes=1)
+    ... )
+    >>> is_cont
+    True
+    >>> len(gaps)
+    0
+    
+    >>> # Example with a gap
+    >>> timestamps = pd.DatetimeIndex([
+    ...     '2021-01-01 00:00',
+    ...     '2021-01-01 00:01',
+    ...     '2021-01-01 00:05',  # 3-minute gap
+    ... ])
+    >>> is_cont, gaps = validate_timestamp_continuity(
+    ...     timestamps, pd.Timedelta(minutes=1)
+    ... )
+    >>> is_cont
+    False
+    >>> len(gaps)
+    1
+    """
+    if len(timestamps) <= 1:
+        return True, []
+    
+    # Calculate time differences between consecutive timestamps
+    time_diffs = timestamps[1:] - timestamps[:-1]
+    
+    # Define acceptable range
+    min_interval = expected_interval * (1 - tolerance)
+    max_interval = expected_interval * (1 + tolerance)
+    
+    # Find gaps (differences outside acceptable range)
+    gap_mask = (time_diffs < min_interval) | (time_diffs > max_interval)
+    
+    gaps = []
+    if gap_mask.any():
+        gap_indices = np.where(gap_mask)[0]
+        for idx in gap_indices:
+            gaps.append((
+                timestamps[idx],
+                timestamps[idx + 1],
+                time_diffs[idx]
+            ))
+    
+    is_continuous = len(gaps) == 0
+    
+    return is_continuous, gaps
+
+
+def validate_no_duplicates(timestamps: pd.DatetimeIndex) -> Tuple[bool, List[pd.Timestamp]]:
+    """
+    Check for duplicate timestamps in the data.
+    
+    Parameters
+    ----------
+    timestamps : pd.DatetimeIndex
+        Array of timestamps to check
+        
+    Returns
+    -------
+    is_unique : bool
+        True if all timestamps are unique
+    duplicates : list
+        List of duplicate timestamps
+        
+    Examples
+    --------
+    >>> timestamps = pd.DatetimeIndex([
+    ...     '2021-01-01 00:00',
+    ...     '2021-01-01 00:01',
+    ...     '2021-01-01 00:01',  # Duplicate
+    ...     '2021-01-01 00:02',
+    ... ])
+    >>> is_unique, dups = validate_no_duplicates(timestamps)
+    >>> is_unique
+    False
+    >>> len(dups)
+    1
+    """
+    duplicates = timestamps[timestamps.duplicated()].unique().tolist()
+    is_unique = len(duplicates) == 0
+    
+    return is_unique, duplicates
+
+
+def fill_missing_data(
+    data: Dict[str, np.ndarray],
+    expected_interval_minutes: int = 1,
+    method: str = 'linear'
+) -> Dict[str, np.ndarray]:
+    """
+    Fill missing timestamps in OHLCV data by interpolation.
+    
+    This function detects gaps in the timestamp sequence and fills them with
+    interpolated values. For OHLC data, it uses forward fill for open/high/low/close,
+    and zeros for volume/trades (since no trading occurred).
+    
+    Parameters
+    ----------
+    data : dict
+        OHLCV data dictionary with 'date' key containing datetime64 array
+    expected_interval_minutes : int, default=1
+        Expected minutes between data points
+    method : str, default='linear'
+        Interpolation method:
+        - 'linear': Linear interpolation for OHLC (default)
+        - 'forward': Forward fill (carry last value)
+        - 'backward': Backward fill (carry next value)
+        - 'nearest': Nearest neighbor
+        
+    Returns
+    -------
+    filled_data : dict
+        New OHLCV dictionary with gaps filled
+        
+    Examples
+    --------
+    >>> # Data with a gap
+    >>> dates = pd.DatetimeIndex([
+    ...     '2021-01-01 00:00',
+    ...     '2021-01-01 00:01',
+    ...     '2021-01-01 00:05',  # Missing 00:02, 00:03, 00:04
+    ... ])
+    >>> data = create_ohlcv_dict(
+    ...     list_open=[100.0, 101.0, 105.0],
+    ...     list_close=[100.5, 101.5, 105.5],
+    ...     list_high=[101.0, 102.0, 106.0],
+    ...     list_low=[99.5, 100.5, 104.5],
+    ...     list_volume=[1000.0, 1100.0, 1200.0],
+    ...     list_trades=[50.0, 55.0, 60.0],
+    ...     list_time=dates.tolist()
+    ... )
+    >>> filled = fill_missing_data(data, expected_interval_minutes=1)
+    >>> len(filled['date'])  # Should have 6 points (00:00 to 00:05)
+    6
+    
+    Notes
+    -----
+    For OHLCV data:
+    - Open/High/Low/Close: Interpolated using specified method
+    - Volume: Set to 0 for missing periods (no trading)
+    - Trades: Set to 0 for missing periods (no trades)
+    
+    The function preserves the original data types and maintains
+    consistency in OHLC relationships.
+    """
+    timestamps = pd.DatetimeIndex(data['date'])
+    expected_interval = pd.Timedelta(minutes=expected_interval_minutes)
+    
+    # Check if there are any gaps
+    is_continuous, gaps = validate_timestamp_continuity(
+        timestamps, expected_interval, tolerance=0.1
+    )
+    
+    if is_continuous:
+        logger.info("Data is already continuous, no filling needed")
+        return data.copy()
+    
+    # Create DataFrame for easier manipulation
+    df = pd.DataFrame({
+        'open': data['open'],
+        'high': data['high'],
+        'low': data['low'],
+        'close': data['close'],
+        'volume': data['volume'],
+        'trades': data['trades']
+    }, index=timestamps)
+    
+    # Generate complete date range
+    start_time = timestamps[0]
+    end_time = timestamps[-1]
+    complete_range = pd.date_range(
+        start=start_time,
+        end=end_time,
+        freq=f'{expected_interval_minutes}min'
+    )
+    
+    # Reindex to include missing timestamps
+    df_complete = df.reindex(complete_range)
+    
+    # Log warning about missing data
+    missing_count = df_complete.isna().any(axis=1).sum()
+    if missing_count > 0:
+        logger.warning(
+            f"Found {missing_count} missing data points. "
+            f"Filling gaps using '{method}' interpolation."
+        )
+    
+    # Interpolate OHLC values
+    if method == 'linear':
+        df_complete['open'] = df_complete['open'].interpolate(method='linear')
+        df_complete['high'] = df_complete['high'].interpolate(method='linear')
+        df_complete['low'] = df_complete['low'].interpolate(method='linear')
+        df_complete['close'] = df_complete['close'].interpolate(method='linear')
+    elif method == 'forward':
+        df_complete['open'] = df_complete['open'].ffill()
+        df_complete['high'] = df_complete['high'].ffill()
+        df_complete['low'] = df_complete['low'].ffill()
+        df_complete['close'] = df_complete['close'].ffill()
+    elif method == 'backward':
+        df_complete['open'] = df_complete['open'].bfill()
+        df_complete['high'] = df_complete['high'].bfill()
+        df_complete['low'] = df_complete['low'].bfill()
+        df_complete['close'] = df_complete['close'].bfill()
+    elif method == 'nearest':
+        df_complete['open'] = df_complete['open'].interpolate(method='nearest')
+        df_complete['high'] = df_complete['high'].interpolate(method='nearest')
+        df_complete['low'] = df_complete['low'].interpolate(method='nearest')
+        df_complete['close'] = df_complete['close'].interpolate(method='nearest')
+    else:
+        raise ValueError(f"Unknown interpolation method: {method}")
+    
+    # For volume and trades, fill missing values with 0
+    # (no trading activity during missing periods)
+    df_complete['volume'] = df_complete['volume'].fillna(0.0)
+    df_complete['trades'] = df_complete['trades'].fillna(0.0)
+    
+    # Convert back to dictionary format
+    filled_data = {
+        'open': df_complete['open'].values,
+        'high': df_complete['high'].values,
+        'low': df_complete['low'].values,
+        'close': df_complete['close'].values,
+        'volume': df_complete['volume'].values,
+        'trades': df_complete['trades'].values,
+        'date': df_complete.index.values
+    }
+    
+    logger.info(
+        f"Filled {missing_count} missing data points. "
+        f"Data now has {len(filled_data['date'])} points."
+    )
+    
+    return filled_data
+
+
+def assert_data_continuity(
+    data: Dict[str, np.ndarray],
+    expected_interval_minutes: int = 1,
+    tolerance: float = 0.1,
+    raise_on_gaps: bool = True,
+    fill_gaps: bool = False,
+    interpolation_method: str = 'linear'
+) -> Dict[str, any]:
+    """
+    Validate data continuity and optionally fill gaps with interpolation.
+    
+    Parameters
+    ----------
+    data : dict
+        OHLCV data dictionary with 'date' key containing datetime64 array
+    expected_interval_minutes : int, default=1
+        Expected minutes between data points
+    tolerance : float, default=0.1
+        Tolerance for interval (10% by default)
+    raise_on_gaps : bool, default=True
+        If True, raise AssertionError on gaps or duplicates (only if fill_gaps=False)
+        If False, just return the report
+    fill_gaps : bool, default=False
+        If True, automatically fill gaps using interpolation
+        If False, just report gaps
+    interpolation_method : str, default='linear'
+        Method for interpolating missing OHLC values:
+        - 'linear': Linear interpolation
+        - 'forward': Forward fill (carry last value)
+        - 'backward': Backward fill (carry next value)
+        - 'nearest': Nearest neighbor
+        
+    Returns
+    -------
+    report : dict
+        Dictionary with keys:
+        - 'is_continuous': bool
+        - 'has_duplicates': bool  
+        - 'gaps': list of tuples
+        - 'duplicates': list
+        - 'total_points': int
+        - 'expected_points': int (based on time range)
+        - 'filled_data': dict or None (OHLCV dict with gaps filled, if fill_gaps=True)
+        - 'filled_count': int (number of missing points filled)
+        
+    Raises
+    ------
+    AssertionError
+        If raise_on_gaps=True, fill_gaps=False, and gaps or duplicates found
+        
+    Examples
+    --------
+    >>> # Basic validation
+    >>> data = {
+    ...     'date': pd.date_range('2021-01-01', periods=100, freq='1min').values,
+    ...     'open': np.random.rand(100),
+    ...     # ... other keys
+    ... }
+    >>> report = assert_data_continuity(data, expected_interval_minutes=1)
+    >>> report['is_continuous']
+    True
+    
+    >>> # Validate and fill gaps
+    >>> report = assert_data_continuity(
+    ...     data,
+    ...     expected_interval_minutes=1,
+    ...     fill_gaps=True,
+    ...     interpolation_method='linear'
+    ... )
+    >>> if report['filled_data'] is not None:
+    ...     data = report['filled_data']  # Use filled data
+    
+    Notes
+    -----
+    When fill_gaps=True:
+    - Missing timestamps are identified
+    - OHLC values are interpolated using specified method
+    - Volume and trades are set to 0 for missing periods
+    - A warning is logged with details
+    - The filled data is returned in report['filled_data']
+    
+    The function will NOT raise AssertionError if fill_gaps=True,
+    even if raise_on_gaps=True, since gaps are being automatically fixed.
+    """
+    timestamps = pd.DatetimeIndex(data['date'])
+    expected_interval = pd.Timedelta(minutes=expected_interval_minutes)
+    
+    # Check for duplicates
+    is_unique, duplicates = validate_no_duplicates(timestamps)
+    
+    # Check for gaps
+    is_continuous, gaps = validate_timestamp_continuity(
+        timestamps, expected_interval, tolerance
+    )
+    
+    # Calculate expected vs actual points
+    if len(timestamps) > 1:
+        time_range = timestamps[-1] - timestamps[0]
+        expected_points = int(time_range / expected_interval) + 1
+    else:
+        expected_points = len(timestamps)
+    
+    filled_data = None
+    filled_count = 0
+    
+    # Fill gaps if requested
+    if fill_gaps and not is_continuous:
+        logger.warning(
+            f"Data has {len(gaps)} gaps. Filling using '{interpolation_method}' interpolation."
+        )
+        filled_data = fill_missing_data(
+            data,
+            expected_interval_minutes=expected_interval_minutes,
+            method=interpolation_method
+        )
+        filled_count = len(filled_data['date']) - len(data['date'])
+        
+        # Update continuity status based on filled data
+        filled_timestamps = pd.DatetimeIndex(filled_data['date'])
+        is_continuous_after_fill, gaps_after_fill = validate_timestamp_continuity(
+            filled_timestamps, expected_interval, tolerance
+        )
+        
+        if is_continuous_after_fill:
+            logger.info(f"Successfully filled {filled_count} missing data points. Data is now continuous.")
+        else:
+            logger.warning(f"Filled {filled_count} points, but {len(gaps_after_fill)} gaps remain.")
+    
+    report = {
+        'is_continuous': is_continuous and is_unique,
+        'has_duplicates': not is_unique,
+        'gaps': gaps,
+        'duplicates': duplicates,
+        'total_points': len(timestamps),
+        'expected_points': expected_points,
+        'missing_points': expected_points - len(timestamps) if not is_unique else len(gaps),
+        'filled_data': filled_data,
+        'filled_count': filled_count
+    }
+    
+    # Raise errors if requested (but not if we're filling gaps)
+    if raise_on_gaps and not fill_gaps:
+        if not is_unique:
+            dup_str = ', '.join([str(d) for d in duplicates[:5]])
+            if len(duplicates) > 5:
+                dup_str += f' ... and {len(duplicates) - 5} more'
+            raise AssertionError(
+                f"Found {len(duplicates)} duplicate timestamps: {dup_str}"
+            )
+        
+        if not is_continuous:
+            gap_str = '\n  '.join([
+                f"Gap of {gap[2]} between {gap[0]} and {gap[1]}"
+                for gap in gaps[:5]
+            ])
+            if len(gaps) > 5:
+                gap_str += f'\n  ... and {len(gaps) - 5} more gaps'
+            raise AssertionError(
+                f"Found {len(gaps)} gaps in timestamp sequence:\n  {gap_str}\n"
+                f"Expected {expected_points} points, got {len(timestamps)}"
+            )
+    
+    return report
 
 
 def validate_ohlcv_data(data: Dict[str, np.ndarray]) -> None:

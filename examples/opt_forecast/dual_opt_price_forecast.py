@@ -363,7 +363,7 @@ class DualOptForecast:
         dt60_decomp_idx = np.arange(0, 4 * self.opt_dsvars.loc[60, ["decomplen", "bclen"]].sum().item())
         dt15_to_dt60 = np.flip(np.arange(dt60_decomp_idx[-1], 0, step=-4))
 
-        list_trade_ops = []
+        # list_trade_ops = []
         list_trade_gain = []
 
         for i, idx_i in enumerate(tqdm(self.np_idx_inc_eval[:self.run_size], desc="Processing")):
@@ -378,72 +378,77 @@ class DualOptForecast:
                     cleanup_directory(local_plot_path_i)
 
             # Get inputs (X) from 15 and 60 minutes tickers
-            dtm_x_i = self._get_input_signals(dt15_decomp_idx_i, dt60_decomp_idx_i)
+            try:
+                dtm_x_i = self._get_input_signals(dt15_decomp_idx_i, dt60_decomp_idx_i)
 
-            # Decompose and process the signals, where Y =: F(X)
-            dict_signal_process_i = self._processing_signals(dtm_x_i, plot_path=local_plot_path_i)
+                # Decompose and process the signals, where Y =: F(X)
+                dict_signal_process_i = self._processing_signals(dtm_x_i, plot_path=local_plot_path_i)
 
-            # Get Support Points
-            sr_support_points_i = self._get_support_points(dtm_x_i[15])
+                # Get Support Points
+                sr_support_points_i = self._get_support_points(dtm_x_i[15])
 
-            ## Reference (Future Values)
-            end_dt15_i = dict_signal_process_i[15]["forecast"].index[dt15_bclen:][0] - dt15_time
-            list_dt15_output_idx_i = create_time_index(dt15_time, end_dt15_i, 160)
+                ## Reference (Future Values)
+                end_dt15_i = dict_signal_process_i[15]["forecast"].index[dt15_bclen:][0] - dt15_time
+                list_dt15_output_idx_i = create_time_index(dt15_time, end_dt15_i, 160)
 
-            # #############################################################################
-            # TODO: Calculate A-B-C for the prediction
-            # trailing order parameter
-            ## tolerance parameter (to enter into the trade)
-            dx1_15_i = 100. * dict_signal_process_i[15]["dy1"] / dtm_x_i[15].iloc[-1].item()
-            dx1_60_i = 100. * dict_signal_process_i[60]["dy1"] / dtm_x_i[15].iloc[-1].item()
-            dxm_60_i = 100. * dict_signal_process_i[60]["dym"] / dtm_x_i[15].iloc[-1].item()
+                # #############################################################################
+                # TODO: Calculate A-B-C for the prediction
+                # trailing order parameter
+                ## tolerance parameter (to enter into the trade)
+                dx1_15_i = 100. * dict_signal_process_i[15]["dy1"] / dtm_x_i[15].iloc[-1].item()
+                dx1_60_i = 100. * dict_signal_process_i[60]["dy1"] / dtm_x_i[15].iloc[-1].item()
+                dxm_60_i = 100. * dict_signal_process_i[60]["dym"] / dtm_x_i[15].iloc[-1].item()
 
-            df_trade_bounds_i = pd.DataFrame()
-            if abs(dx1_15_i) >= 0.3 and (abs(dx1_60_i) >= 1. or abs(dxm_60_i) >= 1.):
-                list_dt15_td_output_idx_i = create_time_index(dt15_time, end_dt15_i, 64)
-                np_ones = np.ones(len(list_dt15_td_output_idx_i), dtype=float)
+                df_trade_bounds_i = pd.DataFrame()
+                if abs(dx1_15_i) >= 0.3 and (abs(dx1_60_i) >= 1. or abs(dxm_60_i) >= 1.):
+                    list_dt15_td_output_idx_i = create_time_index(dt15_time, end_dt15_i, 64)
+                    np_ones = np.ones(len(list_dt15_td_output_idx_i), dtype=float)
 
-                if dx1_15_i > 0. and (dx1_60_i >= 0. or dxm_60_i >= 0.):
-                    # Buy
-                    np_lwr_i = 0.99 * dict_signal_process_i[15]["forecast"].iloc[:, 0].min()
-                    np_upp_i = dict_signal_process_i[15]["forecast"]["mean"].iloc[-1].item()
+                    if dx1_15_i > 0. and (dx1_60_i >= 0. or dxm_60_i >= 0.):
+                        # Buy
+                        np_lwr_i = 0.99 * dict_signal_process_i[15]["forecast"].iloc[:, 0].min()
+                        np_upp_i = dict_signal_process_i[15]["forecast"]["mean"].iloc[-1].item()
 
-                else:
-                    # Sell
-                    np_lwr_i = 1.01 * dict_signal_process_i[15]["forecast"].iloc[:, 8].max()
-                    np_upp_i = dict_signal_process_i[15]["forecast"]["mean"].iloc[-1].item()
+                    else:
+                        # Sell
+                        np_lwr_i = 1.01 * dict_signal_process_i[15]["forecast"].iloc[:, 8].max()
+                        np_upp_i = dict_signal_process_i[15]["forecast"]["mean"].iloc[-1].item()
 
-                sr_stop_loss_i = pd.Series(np_lwr_i * np_ones, index=list_dt15_td_output_idx_i, name="stop_loss")
-                sr_take_profit_i = pd.Series(np_upp_i * np_ones, index=list_dt15_td_output_idx_i, name="take_profit")
+                    sr_stop_loss_i = pd.Series(np_lwr_i * np_ones, index=list_dt15_td_output_idx_i, name="stop_loss")
+                    sr_take_profit_i = pd.Series(np_upp_i * np_ones, index=list_dt15_td_output_idx_i, name="take_profit")
 
-                df_trade_bounds_i = pd.concat([sr_stop_loss_i, sr_take_profit_i], axis=1)
+                    df_trade_bounds_i = pd.concat([sr_stop_loss_i, sr_take_profit_i], axis=1)
 
-            # #############################################################################
-            if self.plot_flag:
-                # plot the trade operation
-                file_path_i = f'{local_plot_path_i}/dual_forecast.png'
-                df_inp_tickers_i = self.input_data.loc[dtm_x_i[15].index[-self.plt_len:], ['open', 'close', 'high', 'low']]
-                df_inp_tickers_rs_i = self._rescaling(df_inp_tickers_i)
+                # #############################################################################
+                if self.plot_flag:
+                    # plot the trade operation
+                    file_path_i = f'{local_plot_path_i}/dual_forecast.png'
+                    df_inp_tickers_i = self.input_data.loc[dtm_x_i[15].index[-self.plt_len:], ['open', 'close', 'high', 'low']]
+                    df_inp_tickers_rs_i = self._rescaling(df_inp_tickers_i)
 
-                ## Real
-                df_dt15_y_i = self.input_data.loc[list_dt15_output_idx_i, ['open', 'close', 'high', 'low']]
-                df_dt15_y_rs_i = self._rescaling(df_dt15_y_i)
+                    ## Real
+                    df_dt15_y_i = self.input_data.loc[list_dt15_output_idx_i, ['open', 'close', 'high', 'low']]
+                    df_dt15_y_rs_i = self._rescaling(df_dt15_y_i)
 
-                sr_dt15_y_signal_decomp_sum_i = dict_signal_process_i[15]["signal_sum"][-self.plt_len:]
-                sr_dt60_y_signal_decomp_sum_i = dict_signal_process_i[60]["signal_sum"][-(self.plt_len // 4):]
+                    sr_dt15_y_signal_decomp_sum_i = dict_signal_process_i[15]["signal_sum"][-self.plt_len:]
+                    sr_dt60_y_signal_decomp_sum_i = dict_signal_process_i[60]["signal_sum"][-(self.plt_len // 4):]
 
-                pkwargs = dict(forward_tickers=df_dt15_y_rs_i,
-                               swt15=sr_dt15_y_signal_decomp_sum_i,
-                               swt60=sr_dt60_y_signal_decomp_sum_i,
-                               dt15_output_tickers=dict_signal_process_i[15]["forecast"].iloc[dt15_bclen:, :],
-                               dt60_output_tickers=dict_signal_process_i[60]["forecast"].iloc[dt60_bclen:, :],
-                               trade_bounds=df_trade_bounds_i,
-                               support=sr_support_points_i,
-                               plot_name=file_path_i,
-                               dpi=500,
-                               )
+                    pkwargs = dict(forward_tickers=df_dt15_y_rs_i,
+                                   swt15=sr_dt15_y_signal_decomp_sum_i,
+                                   swt60=sr_dt60_y_signal_decomp_sum_i,
+                                   dt15_output_tickers=dict_signal_process_i[15]["forecast"].iloc[dt15_bclen:, :],
+                                   dt60_output_tickers=dict_signal_process_i[60]["forecast"].iloc[dt60_bclen:, :],
+                                   trade_bounds=df_trade_bounds_i,
+                                   support=sr_support_points_i,
+                                   plot_name=file_path_i,
+                                   dpi=500,
+                                   )
 
-                dual_plot_mpl_ticker(df_inp_tickers_rs_i, **pkwargs)
+                    dual_plot_mpl_ticker(df_inp_tickers_rs_i, **pkwargs)
+
+            except Exception as m_err:
+                print(f"Error in processing signals for trial {i}: {m_err}")
+                continue
 
             else:
                 list_trade_gain.append(0.)
@@ -476,17 +481,19 @@ def main_opt_trade():
         df_price_data = pd.DataFrame()
 
     seed = 42
-    dtype = "swt"
-    # dtype = "emd"
+    # dtype = "swt"
+    dtype = "emd"
 
     # run_size = 50
     run_size = 300
 
     # dt 15
-    sr_opt15_forecast = pd.Series(dict(window=334, decomplen=430, bclen=3, nsignal=13, outlen=12), name=15)
+    # sr_opt15_forecast = pd.Series(dict(window=334, decomplen=430, bclen=3, nsignal=13, outlen=12), name=15)     # swt
+    sr_opt15_forecast = pd.Series(dict(window=796, decomplen=1126, bclen=7, nsignal=8, outlen=12), name=15)     # emd
 
     # dt 60
-    sr_opt60_forecast = pd.Series(dict(window=328, decomplen=863, bclen=1, nsignal=3, outlen=8), name=60)
+    # sr_opt60_forecast = pd.Series(dict(window=328, decomplen=863, bclen=1, nsignal=3, outlen=8), name=60)     # swt
+    sr_opt60_forecast = pd.Series(dict(window=467, decomplen=1335, bclen=1, nsignal=12, outlen=8), name=60)     # emd
 
     pd_opt_forecast = pd.concat([sr_opt15_forecast, sr_opt60_forecast], axis=1).T
 
