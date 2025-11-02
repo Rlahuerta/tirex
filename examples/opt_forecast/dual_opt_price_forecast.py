@@ -1,13 +1,13 @@
 from pathlib import Path
-import time
-import datetime
+# import time
+# import datetime
 # import warnings
 import numpy as np
 import pandas as pd
 
 from tqdm import tqdm
 from joblib import load
-from scipy.optimize import differential_evolution, direct, minimize
+# from scipy.optimize import differential_evolution, direct, minimize
 from sklearn.preprocessing import MinMaxScaler
 from typing import Tuple, List, Dict, Any, Optional, Union, Callable
 
@@ -19,7 +19,7 @@ from tirex.utils.ssa import ssa
 from tirex.utils.time import create_time_index
 from tirex.utils.path import cleanup_directory
 from tirex.utils.plot import plot_fc, dual_plot_mpl_ticker
-from tirex.utils.trade import TrailingStopOrder
+# from tirex.utils.trade import TrailingStopOrder
 
 # Add the project root to the Python path
 project_local_path = Path(__file__).resolve().parent
@@ -238,6 +238,8 @@ class DualOptForecast:
             if self.plot_flag and plot_path is not None:
                 # TODO: add dt to the name
                 plt_kwargs = dict(save_path=f'{plot_path}/decomp_signal_dt{num_dt}_i{k}_pred.png')
+                plt_kwargs["rescale"] = self.scaler_data
+
                 if bclen > 0:
                     plt_kwargs["bcs"] = pd_mean_y_k.iloc[:bclen]
 
@@ -442,6 +444,7 @@ class DualOptForecast:
                                    support=sr_support_points_i,
                                    plot_name=file_path_i,
                                    dpi=500,
+                                   rescale=self.scaler_data,
                                    )
 
                     dual_plot_mpl_ticker(df_inp_tickers_rs_i, **pkwargs)
@@ -463,7 +466,9 @@ class DualOptForecast:
 def main_opt_trade():
 
     # input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
-    input_data_path = (Path(__file__).parent / "data" / "btcusd_15m_2025-10-26.parquet").resolve()
+    # input_data_path = (Path(__file__).parent / "data" / "btcusd_15m_2025-10-26.parquet").resolve()
+    input_data_path = (Path(__file__).parent.parent.parent / "Signals/data/btcusd_15m_2025-11-01.parquet").resolve()
+
     dt = 15
     # dt = 60
 
@@ -482,18 +487,21 @@ def main_opt_trade():
 
     seed = 42
     # dtype = "swt"
-    dtype = "emd"
+    # dtype = "emd"
+    dtype = "ewt"
 
     # run_size = 50
     run_size = 300
 
     # dt 15
     # sr_opt15_forecast = pd.Series(dict(window=334, decomplen=430, bclen=3, nsignal=13, outlen=12), name=15)     # swt
-    sr_opt15_forecast = pd.Series(dict(window=796, decomplen=1126, bclen=7, nsignal=8, outlen=12), name=15)     # emd
+    # sr_opt15_forecast = pd.Series(dict(window=796, decomplen=1126, bclen=7, nsignal=8, outlen=12), name=15)     # emd
+    sr_opt15_forecast = pd.Series(dict(window=472, decomplen=1059, bclen=0, nsignal=18, outlen=12), name=15)     # ewt
 
     # dt 60
-    # sr_opt60_forecast = pd.Series(dict(window=328, decomplen=863, bclen=1, nsignal=3, outlen=8), name=60)     # swt
-    sr_opt60_forecast = pd.Series(dict(window=467, decomplen=1335, bclen=1, nsignal=12, outlen=8), name=60)     # emd
+    # sr_opt60_forecast = pd.Series(dict(window=328, decomplen=863, bclen=1, nsignal=3, outlen=8), name=60)       # swt
+    # sr_opt60_forecast = pd.Series(dict(window=467, decomplen=1335, bclen=1, nsignal=12, outlen=8), name=60)     # emd
+    sr_opt60_forecast = pd.Series(dict(window=106, decomplen=831, bclen=2, nsignal=16, outlen=8), name=60)     # ewt
 
     pd_opt_forecast = pd.concat([sr_opt15_forecast, sr_opt60_forecast], axis=1).T
 
