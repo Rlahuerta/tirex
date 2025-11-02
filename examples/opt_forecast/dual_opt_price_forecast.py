@@ -64,7 +64,7 @@ class DualOptForecast:
         # Forecast Variables
         self.opt_dsvars = opt_dsvars
 
-        self.out_len = self.opt_dsvars.loc[60, "outlen"].item() * 4
+        self.out_len = self.opt_dsvars.loc[60, "outlen"] * 4
         self.plt_len = plt_len
         self.inc_len = inc_len
         self.seed = seed
@@ -309,15 +309,15 @@ class DualOptForecast:
         for dt_k, sr_x_dt_k in dtm_x.items():
 
             # First Signal Decomposition
-            pd_signal_decomp_k = self._signal_decomposition(sr_x_dt_k, self.opt_dsvars.loc[dt_k, "nsignal"].item())
-            sr_signal_sum_k = pd_signal_decomp_k.iloc[self.opt_dsvars.loc[dt_k, "bclen"].item():, :].sum(axis=1)
+            pd_signal_decomp_k = self._signal_decomposition(sr_x_dt_k, self.opt_dsvars.loc[dt_k, "nsignal"])
+            sr_signal_sum_k = pd_signal_decomp_k.iloc[self.opt_dsvars.loc[dt_k, "bclen"]:, :].sum(axis=1)
 
-            bc_win_k = self.opt_dsvars.loc[dt_k, ["window", "bclen"]].sum().item()
+            bc_win_k = self.opt_dsvars.loc[dt_k, ["window", "bclen"]].sum()
 
             # Forecast the signal
             pd_forecast_k = self._forecast_signal(pd_signal_decomp_k[-bc_win_k:],
-                                                  out_len=self.opt_dsvars.loc[dt_k, "outlen"].item(),
-                                                  bclen=self.opt_dsvars.loc[dt_k, "bclen"].item(),
+                                                  out_len=self.opt_dsvars.loc[dt_k, "outlen"],
+                                                  bclen=self.opt_dsvars.loc[dt_k, "bclen"],
                                                   plot_path=plot_path)
 
             if dt_k == 60:
@@ -356,21 +356,21 @@ class DualOptForecast:
         local_obj_plot_path.mkdir(exist_ok=True)
         local_plot_path_i = None
 
-        dt15_bclen = self.opt_dsvars.loc[15, "bclen"].item()
-        dt60_bclen = self.opt_dsvars.loc[60, "bclen"].item()
+        dt15_bclen = self.opt_dsvars.loc[15, "bclen"]
+        dt60_bclen = self.opt_dsvars.loc[60, "bclen"]
 
         dt15_time = self.sr_data_rs.index[1] - self.sr_data_rs.index[0]
 
-        dt15_decomp_idx = np.arange(0, self.opt_dsvars.loc[15, ["decomplen", "bclen"]].sum().item())
-        dt60_decomp_idx = np.arange(0, 4 * self.opt_dsvars.loc[60, ["decomplen", "bclen"]].sum().item())
+        dt15_decomp_idx = np.arange(0, self.opt_dsvars.loc[15, ["decomplen", "bclen"]].sum())
+        dt60_decomp_idx = np.arange(0, 4 * self.opt_dsvars.loc[60, ["decomplen", "bclen"]].sum())
         dt15_to_dt60 = np.flip(np.arange(dt60_decomp_idx[-1], 0, step=-4))
 
         # list_trade_ops = []
         list_trade_gain = []
 
         for i, idx_i in enumerate(tqdm(self.np_idx_inc_eval[:self.run_size], desc="Processing")):
-            dt15_decomp_idx_i = dt15_decomp_idx + (idx_i - self.opt_dsvars.loc[15, "decomplen"].item())
-            dt60_decomp_idx_i = (dt60_decomp_idx + (idx_i - 4 * self.opt_dsvars.loc[60, "decomplen"].item()))[dt15_to_dt60]
+            dt15_decomp_idx_i = dt15_decomp_idx + (idx_i - self.opt_dsvars.loc[15, "decomplen"])
+            dt60_decomp_idx_i = (dt60_decomp_idx + (idx_i - 4 * self.opt_dsvars.loc[60, "decomplen"]))[dt15_to_dt60]
 
             if self.plot_flag:
                 local_plot_path_i = (local_obj_plot_path / f"trial_{i}").resolve()
@@ -468,6 +468,7 @@ def main_opt_trade():
     # input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
     # input_data_path = (Path(__file__).parent / "data" / "btcusd_15m_2025-10-26.parquet").resolve()
     input_data_path = (Path(__file__).parent.parent.parent / "Signals/data/btcusd_15m_2025-11-01.parquet").resolve()
+    # input_data_path = (Path(__file__).parent.parent.parent / "Signals/data/btcusd_15m_2025-11-02.parquet").resolve()
 
     dt = 15
     # dt = 60
@@ -488,24 +489,29 @@ def main_opt_trade():
     seed = 42
     # dtype = "swt"
     # dtype = "emd"
-    dtype = "ewt"
+    # dtype = "ewt"
+    dtype = "ssa"
 
     # run_size = 50
     run_size = 300
 
     dict_cfg = dict(
         swt={
-            15: pd.Series(dict(window=334, decomplen=430, bclen=3, nsignal=13, outlen=12), name=15),
-            60: pd.Series(dict(window=328, decomplen=863, bclen=1, nsignal=3, outlen=8), name=60),
+            15: pd.Series(dict(window=334, decomplen=430, bclen=3, nsignal=13, outlen=12, dtype="swt"), name=15),
+            60: pd.Series(dict(window=328, decomplen=863, bclen=1, nsignal=3, outlen=8, dtype="swt"), name=60),
         },
         emd={
-            15: pd.Series(dict(window=160, decomplen=1280, bclen=0, nsignal=13, outlen=12), name=15),
-            60: pd.Series(dict(window=796, decomplen=1126, bclen=7, nsignal=8, outlen=8), name=60),
+            15: pd.Series(dict(window=160, decomplen=1280, bclen=0, nsignal=13, outlen=12, dtype="emd"), name=15),
+            60: pd.Series(dict(window=796, decomplen=1126, bclen=7, nsignal=8, outlen=8, dtype="emd"), name=60),
         },
         ewt={
-            # 15: pd.Series(dict(window=861, decomplen=3361, bclen=0, nsignal=18, outlen=12), name=15),
-            15: pd.Series(dict(window=446, decomplen=1317, bclen=0, nsignal=12, outlen=12), name=15),
-            60: pd.Series(dict(window=106, decomplen=831, bclen=2, nsignal=16, outlen=8), name=60),
+            # 15: pd.Series(dict(window=861, decomplen=3361, bclen=0, nsignal=18, outlen=12, dtype="ewt"), name=15),
+            15: pd.Series(dict(window=446, decomplen=1317, bclen=0, nsignal=12, outlen=12, dtype="ewt"), name=15),
+            60: pd.Series(dict(window=106, decomplen=831, bclen=2, nsignal=16, outlen=8, dtype="ewt"), name=60),
+        },
+        ssa={
+            15: pd.Series(dict(window=1794, decomplen=2228, bclen=9, nsignal=17, outlen=12, dtype="ssa"), name=15),
+            60: pd.Series(dict(window=445, decomplen=4133, bclen=0, nsignal=18, outlen=8, dtype="ssa"), name=60),
         },
     )
 

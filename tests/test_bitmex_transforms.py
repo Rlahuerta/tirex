@@ -306,7 +306,7 @@ class TestResampleOHLCV(unittest.TestCase):
     def test_unsupported_interval_raises_error(self):
         """Test that unsupported interval raises ValueError."""
         with self.assertRaises(ValueError):
-            resample_ohlcv(self.data, interval_minutes=15)
+            resample_ohlcv(self.data, interval_minutes=7)  # 7 is not supported
     
     def test_invalid_data_raises_error(self):
         """Test that invalid data raises error."""

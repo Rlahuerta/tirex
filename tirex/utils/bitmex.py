@@ -192,7 +192,8 @@ class BitMEX:
         symbol: str,
         bin_size: str = '1m',
         count: int = 100,
-        start_time: Optional[pd.Timestamp] = None
+        start_time: Optional[pd.Timestamp] = None,
+        end_time: Optional[pd.Timestamp] = None
     ) -> list:
         """
         Get bucketed trade data (OHLCV candles).
@@ -207,6 +208,8 @@ class BitMEX:
             Number of candles to fetch
         start_time : pd.Timestamp, optional
             Start time for data
+        end_time : pd.Timestamp, optional
+            End time for data
             
         Returns
         -------
@@ -217,11 +220,14 @@ class BitMEX:
             'symbol': symbol,
             'binSize': bin_size,
             'count': count,
-            'reverse': True
+            'reverse': False  # Changed to False to match old implementation
         }
         
         if start_time:
-            params['startTime'] = start_time.isoformat()
+            params['startTime'] = start_time.strftime('%Y-%m-%dT%H:%M:%S')
+        
+        if end_time:
+            params['endTime'] = end_time.strftime('%Y-%m-%dT%H:%M:%S')
         
         return self.client.get('/trade/bucketed', params=params)
     
@@ -247,10 +253,11 @@ class BitMEX:
         fn_time : pd.Timestamp, optional
             End time for data (defaults to now)
         dt : int, default=1
-            Resampling interval in minutes (1, 3, or 30)
-            - dt=1 or 2: No resampling (1-minute data)
-            - dt=3: Resample to 3-minute bars
-            - dt=6: Resample to 30-minute bars
+            Time resolution multiplier:
+            - dt=1: 5-minute bars (fetches '5m' data, no resampling)
+            - dt=3: 15-minute bars (fetches '5m' data, resamples 3 bars into 1)
+            - dt=6: 30-minute bars (fetches '5m' data, resamples 6 bars into 1)
+            - dt=12: 60-minute bars (fetches '1h' data, no resampling)
             
         Returns
         -------
@@ -260,10 +267,12 @@ class BitMEX:
         Examples
         --------
         >>> bitmex = BitMEX(base_url='https://www.bitmex.com/api/v1/')
-        >>> # Get 24 hours of 1-minute data
+        >>> # Get 24 hours of 5-minute data
         >>> df = bitmex.get_net_chart(24, 'XBTUSD', dt=1)
-        >>> # Get 48 hours of 3-minute data
+        >>> # Get 48 hours of 15-minute data
         >>> df = bitmex.get_net_chart(48, 'XBTUSD', dt=3)
+        >>> # Get 72 hours of 60-minute data
+        >>> df = bitmex.get_net_chart(72, 'XBTUSD', dt=12)
         
         Notes
         -----
@@ -273,34 +282,107 @@ class BitMEX:
         assert hours > 0, "Hours must be positive"
         assert cpair, "Currency pair must be specified"
         
-        fn_time = fn_time or pd.Timestamp.now()
+        # Determine bin size based on dt parameter (matches old implementation)
+        count = 500
+        if dt == 1:
+            str_dt = '5m'  # Old implementation uses 5m for dt=1
+            dt_i = 5
+        elif dt in [2]:
+            str_dt = '1m'
+            dt_i = 1
+        elif dt == 3:
+            str_dt = '5m'
+            dt_i = 5
+        elif dt == 6:
+            str_dt = '5m'
+            dt_i = 5
+        elif dt == 12:
+            str_dt = '1h'
+            dt_i = 60
+        else:
+            str_dt = '1m'
+            dt_i = 1
         
-        # Calculate number of API calls needed (500 candles per call)
-        dt_loop = int(hours * 60 / 500) + 1
+        # Set end time (use current time as end point)
+        if fn_time is None:
+            fn_time = pd.Timestamp.now(tz='UTC')
+        
+        # Calculate start time and loop parameters
+        delta_time = pd.Timedelta(hours=hours)
+        st_time = fn_time - delta_time
+        dt_min = pd.Timedelta(hours=hours) / pd.Timedelta(minutes=dt_i)
+        dt_loop = dt_min // count
         
         # Initialize data lists
         list_open, list_close, list_high, list_low = [], [], [], []
         list_vol, list_ntrades, list_time = [], [], []
         
-        logger.info(f"Fetching {hours} hours of {cpair} data ({dt_loop} API calls)...")
+        # Calculate number of loops
+        if dt_loop < 1.:
+            num_loop = 1
+        else:
+            num_loop = int(dt_loop) + 1
         
-        # Fetch data in batches
-        for _ in tqdm(range(dt_loop), desc="Fetching data"):
+        logger.info(f"Fetching {hours} hours of {cpair} data ({num_loop} API calls)...")
+        
+        # Fetch data in batches, iterating FORWARD from start_time
+        start_time_i = st_time
+        for i in tqdm(range(num_loop), desc="Fetching data"):
+            # Calculate time window for this iteration
+            if dt_loop > 1.:
+                dtime_i = count * pd.Timedelta(minutes=dt_i)
+            elif 0. < dt_loop <= 1.:
+                dtime_i = dt_loop * count * pd.Timedelta(minutes=dt_i)
+            elif dt_loop <= 0:
+                dtime_i = dt_min * pd.Timedelta(minutes=dt_i)
+            
+            # Set start and end times for this batch
+            query_start_time = start_time_i
+            query_end_time = start_time_i + dtime_i
+            
+            # Retry logic
+            list_data = None
+            for attempt in range(10):
+                for retry in range(20):
+                    try:
+                        list_data = self.get_trade_bucketed(
+                            symbol=cpair,
+                            bin_size=str_dt,
+                            count=count,
+                            start_time=query_start_time,
+                            end_time=query_end_time
+                        )
+                        break
+                    except Exception as e:
+                        if retry < 19:
+                            logger.debug(f'Retry {retry+1}: {e}')
+                            time.sleep(1.2)
+                        else:
+                            logger.warning(f'Failed after {retry+1} retries')
+                            list_data = None
+                
+                if list_data is None:
+                    logger.warning('Retrying in 70 seconds...')
+                    time.sleep(70.)
+                else:
+                    break
+            
+            if list_data is None:
+                raise BitMEXError('BitMEX API is not accessible after multiple retries')
+            
+            # Defensive check: ensure list_data is a list before iterating
+            if not isinstance(list_data, list):
+                logger.error(f"Expected list but got {type(list_data)}: {list_data}")
+                raise BitMEXError(f"Invalid response type from API: {type(list_data)}")
+            
+            # Log when empty responses occur
+            if len(list_data) == 0:
+                logger.warning(f"Empty response for batch {i+1}/{num_loop} (start={query_start_time}, end={query_end_time})")
+            else:
+                logger.debug(f"Batch {i+1}/{num_loop}: received {len(list_data)} candles")
+            
+            # Parse data - reverse because API returns newest first with reverse=False
             try:
-                # Get data batch
-                list_data = self.get_trade_bucketed(
-                    symbol=cpair,
-                    bin_size='1m',
-                    count=500,
-                    start_time=fn_time - pd.Timedelta(minutes=500)
-                )
-                
-                if not list_data:
-                    logger.warning("No data returned, retrying in 70s...")
-                    time.sleep(70)
-                    continue
-                
-                # Parse data in reverse chronological order
                 for data_point in reversed(list_data):
                     list_open.append(data_point['open'])
                     list_close.append(data_point['close'])
@@ -309,18 +391,22 @@ class BitMEX:
                     list_time.append(pd.to_datetime(data_point['timestamp'], errors='coerce'))
                     list_ntrades.append(data_point.get('trades', 0))
                     list_vol.append(data_point.get('volume', 0))
-                
-                # Update time window
-                fn_time -= pd.Timedelta(minutes=500)
-                
-            except BitMEXError as e:
-                logger.error(f"API error: {e}")
-                raise
             except Exception as e:
-                logger.error(f"Unexpected error: {e}")
-                continue
+                logger.error(f'Error parsing data in batch {i+1}/{num_loop}: {e}')
+                logger.error(f'Problematic data: {list_data[:2] if list_data else "None"}')  # Show first 2 items
+                raise
             
+            # Move to next time window
+            start_time_i += dtime_i
+            dt_loop -= 1.
             time.sleep(0.5)  # Rate limiting
+        
+        # Assertion: Ensure we have data before creating OHLCV dict
+        assert len(list_open) > 0, f"No data retrieved after {num_loop} API calls. Check symbol '{cpair}' and time range."
+        assert len(list_open) == len(list_close) == len(list_high) == len(list_low) == len(list_time), \
+            "Data lists have inconsistent lengths"
+        
+        logger.info(f"Successfully accumulated {len(list_open)} data points from {num_loop} API calls")
         
         # Create OHLCV dictionary
         ohlcv_dict = create_ohlcv_dict(
@@ -328,21 +414,37 @@ class BitMEX:
             list_vol, list_ntrades, list_time
         )
         
-        # Determine resampling interval
-        if dt in [1, 2]:
-            interval_minutes = 1  # No resampling
+        # Determine resampling interval based on dt parameter
+        # dt=1: 5-minute bars (no resampling needed, raw 5m data)
+        # dt=3: 15-minute bars (resample 3x5min = 15min)
+        # dt=6: 30-minute bars (resample 6x5min = 30min)
+        # dt=12: 60-minute bars (no resampling needed, already fetched 1h data)
+        if dt == 1:
+            interval_minutes = 0  # No resampling, use raw 5m data
+        elif dt in [2]:
+            interval_minutes = 1  # Resample to 1m (not typical)
         elif dt == 3:
-            interval_minutes = 3  # 3-minute bars
+            interval_minutes = 15  # Resample 3 x 5m bars into 1 x 15m bar
         elif dt == 6:
-            interval_minutes = 30  # 30-minute bars
+            interval_minutes = 30  # Resample 6 x 5m bars into 1 x 30m bar
+        elif dt == 12:
+            interval_minutes = 0  # No resampling, already fetched 1h data directly
         else:
-            logger.warning(f"Unsupported dt={dt}, defaulting to 1-minute")
-            interval_minutes = 1
+            logger.warning(f"Unsupported dt={dt}, defaulting to no resampling")
+            interval_minutes = 0
         
-        # Resample data
-        df = resample_ohlcv(ohlcv_dict, interval_minutes)
+        # Resample data if needed
+        if interval_minutes > 0:
+            df = resample_ohlcv(ohlcv_dict, interval_minutes)
+            df.sort_index(inplace=True)  # Ensure chronological order
+        else:
+            # No resampling needed - use raw data
+            df = pd.DataFrame(ohlcv_dict)
+            df.index = pd.to_datetime(df['date'])
+            df.drop('date', axis=1, inplace=True)
+            df.sort_index(inplace=True)
         
-        logger.info(f"Retrieved {len(df)} candles after resampling to {interval_minutes}min")
+        logger.info(f"Retrieved {len(df)} candles (bin_size={str_dt}, resampling={interval_minutes}min)")
         
         return df
     
@@ -477,5 +579,5 @@ if __name__ == '__main__':
     # Example: Fetch 24 hours of 15-minute data for testing
     # For production, increase hours parameter (e.g., 168 for 1 week, 720 for 1 month)
 
-    save_ticker(dt=15, hours=40000)  # Just 24 hours for testing
+    save_ticker(dt=15, hours=5000)  # Just 24 hours for testing
     # save_ticker(dt=60, hours=40000)   # Just 24 hours for testing

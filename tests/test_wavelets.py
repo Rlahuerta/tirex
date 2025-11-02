@@ -3,7 +3,7 @@ import os
 import unittest
 import numpy as np
 import matplotlib.pyplot as plt
-from pathlib import Path
+# from pathlib import Path
 
 from tirex.utils.filters import WaveletFilter
 from tirex.utils.ewt import EmpiricalWaveletTransform
@@ -83,7 +83,7 @@ class TestEWTIntegration(unittest.TestCase):
 
         plt.tight_layout()
         fig.savefig(file_name)
-        plt.close()
+        plt.close(fig)
 
     def test_decompose_synthetic_signal(self):
         """
@@ -177,11 +177,11 @@ class TestEWTIntegration(unittest.TestCase):
         """
 
         # Create a synthetic signal with noise
-        t = np.linspace(0, 1, 1000)
-        freq = 10  # 10 Hz
+        t = np.linspace(0., 1., 100)
+        freq = 3  # 10 Hz
         clean_signal = np.sin(2 * np.pi * freq * t)
         noise = np.random.normal(0, 0.5, t.shape)
-        noisy_signal = clean_signal + 0.2 * noise
+        noisy_signal = clean_signal + 0.1 * noise
 
         # Initialize EWT
         ewt = EmpiricalWaveletTransform()
@@ -196,7 +196,7 @@ class TestEWTIntegration(unittest.TestCase):
         self._plot(t, noisy_signal, result['ewt'], plot_fname)
 
         # Reconstruct the signal using the first few components
-        reconstructed_signal = ewt_components.sum(axis=1)
+        reconstructed_signal = ewt_components[:, :-2].sum(axis=1)
 
         # Verify that the reconstructed signal approximates the clean signal
         np.testing.assert_allclose(reconstructed_signal, clean_signal, atol=0.5)

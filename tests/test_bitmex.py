@@ -190,21 +190,24 @@ class TestBitMEXGetNetChart(unittest.TestCase):
         }
         mock_create_dict.return_value = mock_dict
         
-        # Mock resample
+        # Mock resample (for dt=3, resample will be called)
         mock_df = pd.DataFrame({
             'open': [100.0],
             'close': [101.0],
             'high': [102.0],
             'low': [99.0],
-            'volume': [1000.0]
-        })
+            'volume': [1000.0],
+            'trades': [50.0]
+        }, index=pd.to_datetime(['2021-01-01']))
         mock_resample.return_value = mock_df
         
         bitmex = BitMEX()
-        result = bitmex.get_net_chart(1, 'XBTUSD', dt=1)
+        # Use dt=3 to test resampling path
+        result = bitmex.get_net_chart(1, 'XBTUSD', dt=3)
         
         self.assertIsInstance(result, pd.DataFrame)
         mock_create_dict.assert_called_once()
+        # For dt=3, resample should be called
         mock_resample.assert_called_once()
     
     def test_get_net_chart_requires_positive_hours(self):

@@ -236,21 +236,25 @@ def fill_missing_data(
         df_complete['high'] = df_complete['high'].interpolate(method='linear')
         df_complete['low'] = df_complete['low'].interpolate(method='linear')
         df_complete['close'] = df_complete['close'].interpolate(method='linear')
+
     elif method == 'forward':
         df_complete['open'] = df_complete['open'].ffill()
         df_complete['high'] = df_complete['high'].ffill()
         df_complete['low'] = df_complete['low'].ffill()
         df_complete['close'] = df_complete['close'].ffill()
+
     elif method == 'backward':
         df_complete['open'] = df_complete['open'].bfill()
         df_complete['high'] = df_complete['high'].bfill()
         df_complete['low'] = df_complete['low'].bfill()
         df_complete['close'] = df_complete['close'].bfill()
+
     elif method == 'nearest':
         df_complete['open'] = df_complete['open'].interpolate(method='nearest')
         df_complete['high'] = df_complete['high'].interpolate(method='nearest')
         df_complete['low'] = df_complete['low'].interpolate(method='nearest')
         df_complete['close'] = df_complete['close'].interpolate(method='nearest')
+
     else:
         raise ValueError(f"Unknown interpolation method: {method}")
     
@@ -385,6 +389,12 @@ def assert_data_continuity(
     
     # Fill gaps if requested
     if fill_gaps and not is_continuous:
+        import warnings
+        warnings.warn(
+            f"Data gaps detected: {len(gaps)} gaps found. Filling using '{interpolation_method}' interpolation.",
+            UserWarning,
+            stacklevel=2
+        )
         logger.warning(
             f"Data has {len(gaps)} gaps. Filling using '{interpolation_method}' interpolation."
         )
@@ -414,8 +424,10 @@ def assert_data_continuity(
         'total_points': len(timestamps),
         'expected_points': expected_points,
         'missing_points': expected_points - len(timestamps) if not is_unique else len(gaps),
-        'filled_data': filled_data,
-        'filled_count': filled_count
+        'filled_data': filled_data,  # Filled data or None
+        'filled_count': filled_count,  # Number of gaps filled (backward compat)
+        'data': filled_data if filled_data is not None else data,  # Return filled or original data
+        'gaps_filled': filled_count  # Number of gaps filled (new API)
     }
     
     # Raise errors if requested (but not if we're filling gaps)
@@ -754,6 +766,168 @@ def resample_ohlcv_30min(data: Dict[str, np.ndarray]) -> pd.DataFrame:
     return result_df
 
 
+def resample_5min_to_15min(data: Dict[str, np.ndarray]) -> pd.DataFrame:
+    """
+    Resample 5-minute OHLCV data to 15-minute intervals.
+    
+    This function aggregates three 5-minute bars into one 15-minute bar aligned
+    to 0, 15, 30, and 45 minutes past each hour, matching the reference implementation.
+    
+    Parameters
+    ----------
+    data : dict
+        Dictionary containing 5-minute OHLCV data
+        
+    Returns
+    -------
+    pd.DataFrame
+        Resampled OHLCV data with 15-minute intervals
+        
+    Notes
+    -----
+    This implements the dt=3 logic from the reference bitmex_bck.py:
+    - Takes 5-minute bars as input
+    - Groups every 3 consecutive bars (3 × 5min = 15min)
+    - Aligns to 0, 15, 30, 45 minutes past each hour
+    
+    Aggregation rules:
+    - open: first value in 3-bar period
+    - close: last value in 3-bar period
+    - high: maximum value in period
+    - low: minimum value in period
+    - volume: sum of values in period
+    - trades: sum of values in period
+    """
+    validate_ohlcv_data(data)
+    
+    # Convert to DataFrame
+    df = pd.DataFrame(data)
+    df['date'] = pd.to_datetime(df['date'])
+    df.set_index('date', inplace=True)
+    
+    # Alignment minutes for 15-minute bars
+    alignment_minutes = np.array([0, 15, 30, 45])
+    minutes = df.index.minute
+    
+    resampled_data = {key: [] for key in ['date', 'open', 'close', 'high', 'low', 'volume', 'trades']}
+    
+    # Track how many bars we've seen since last alignment
+    bars_since_alignment = 0
+    
+    for idx in range(len(df)):
+        current_minute = minutes[idx]
+        bars_since_alignment += 1
+        
+        # When we hit an alignment minute AND have seen at least 3 bars
+        if current_minute in alignment_minutes and bars_since_alignment > 2:
+            # Take the last 3 bars (idx-2, idx-1, idx)
+            window = df.iloc[idx-2:idx+1]
+            
+            if len(window) == 3:
+                resampled_data['date'].append(window.index[-1])
+                resampled_data['open'].append(window['open'].iloc[0])
+                resampled_data['close'].append(window['close'].iloc[-1])
+                resampled_data['high'].append(window['high'].max())
+                resampled_data['low'].append(window['low'].min())
+                resampled_data['volume'].append(window['volume'].sum())
+                resampled_data['trades'].append(window['trades'].sum())
+                
+                # Reset counter
+                bars_since_alignment = 0
+    
+    # Create output DataFrame
+    if len(resampled_data['date']) == 0:
+        return pd.DataFrame(columns=['open', 'close', 'high', 'low', 'volume', 'trades'])
+    
+    result_df = pd.DataFrame({
+        k: np.array(resampled_data[k]) for k in ['open', 'close', 'high', 'low', 'volume', 'trades']
+    })
+    result_df.index = pd.to_datetime(resampled_data['date'])
+    
+    return result_df
+
+
+def resample_5min_to_30min(data: Dict[str, np.ndarray]) -> pd.DataFrame:
+    """
+    Resample 5-minute OHLCV data to 30-minute intervals.
+    
+    This function aggregates six 5-minute bars into one 30-minute bar aligned
+    to 0 and 30 minutes past each hour, matching the reference implementation.
+    
+    Parameters
+    ----------
+    data : dict
+        Dictionary containing 5-minute OHLCV data
+        
+    Returns
+    -------
+    pd.DataFrame
+        Resampled OHLCV data with 30-minute intervals
+        
+    Notes
+    -----
+    This implements the dt=6 logic from the reference bitmex_bck.py:
+    - Takes 5-minute bars as input
+    - Groups every 6 consecutive bars (6 × 5min = 30min)
+    - Aligns to 0 and 30 minutes past each hour
+    """
+    validate_ohlcv_data(data)
+    
+    # Create DataFrame
+    df = pd.DataFrame(data)
+    df['date'] = pd.to_datetime(df['date'])
+    df.set_index('date', inplace=True)
+    df.dropna(inplace=True)
+    
+    if len(df) == 0:
+        return pd.DataFrame(columns=['open', 'close', 'high', 'low', 'volume', 'trades'])
+    
+    # Find indices aligned to 0 and 30 minutes
+    alignment_minutes = np.array([0, 30])
+    minutes = df.index.minute
+    
+    # Get indices where minutes are 0 or 30
+    aligned_mask = np.isin(minutes, alignment_minutes)
+    aligned_indices = np.where(aligned_mask)[0]
+    
+    if len(aligned_indices) < 10:
+        logger.warning(f"Insufficient aligned data points: {len(aligned_indices)}")
+        return pd.DataFrame(columns=['open', 'close', 'high', 'low', 'volume', 'trades'])
+    
+    # Skip first 10 aligned points for stability (matches reference)
+    aligned_indices = aligned_indices[10:]
+    
+    resampled_data = {key: [] for key in ['date', 'open', 'close', 'high', 'low', 'volume', 'trades']}
+    
+    # Process pairs of consecutive aligned indices
+    for i in range(len(aligned_indices) - 1):
+        start_idx = aligned_indices[i]
+        end_idx = aligned_indices[i + 1]
+        
+        # Get window from start to end (inclusive of both)
+        window = df.iloc[start_idx:end_idx + 1]
+        
+        if len(window) > 0:
+            resampled_data['date'].append(window.index[-1])
+            resampled_data['open'].append(window['open'].iloc[0])
+            resampled_data['close'].append(window['close'].iloc[-1])
+            resampled_data['high'].append(window['high'].max())
+            resampled_data['low'].append(window['low'].min())
+            resampled_data['volume'].append(window['volume'].sum())
+            resampled_data['trades'].append(window['trades'].sum())
+    
+    # Create output DataFrame
+    if len(resampled_data['date']) == 0:
+        return pd.DataFrame(columns=['open', 'close', 'high', 'low', 'volume', 'trades'])
+    
+    result_df = pd.DataFrame({
+        k: np.array(resampled_data[k]) for k in ['open', 'close', 'high', 'low', 'volume', 'trades']
+    })
+    result_df.index = pd.to_datetime(resampled_data['date'])
+    
+    return result_df
+
+
 def resample_ohlcv(
     data: Dict[str, np.ndarray],
     interval_minutes: int
@@ -769,7 +943,7 @@ def resample_ohlcv(
     data : dict
         Dictionary containing OHLCV data
     interval_minutes : int
-        Target interval in minutes (1, 3, or 30)
+        Target interval in minutes (1, 3, 15, 30)
         
     Returns
     -------
@@ -778,15 +952,16 @@ def resample_ohlcv(
         
     Raises
     ------
-    AssertionError
+    ValueError
         If interval_minutes is not supported
         
     Examples
     --------
     >>> data = {...}  # OHLCV data dictionary
-    >>> df_1min = resample_ohlcv(data, 1)  # No resampling
-    >>> df_3min = resample_ohlcv(data, 3)  # 3-minute bars
-    >>> df_30min = resample_ohlcv(data, 30)  # 30-minute bars
+    >>> df_1min = resample_ohlcv(data, 1)  # No resampling (1-min input)
+    >>> df_3min = resample_ohlcv(data, 3)  # 3-minute bars (from 1-min input)
+    >>> df_15min = resample_ohlcv(data, 15)  # 15-minute bars (from 5-min input)
+    >>> df_30min = resample_ohlcv(data, 30)  # 30-minute bars (from 5-min input)
     """
     validate_ohlcv_data(data)
     
@@ -794,12 +969,14 @@ def resample_ohlcv(
         return resample_ohlcv_simple(data)
     elif interval_minutes == 3:
         return resample_ohlcv_3min(data)
+    elif interval_minutes == 15:
+        return resample_5min_to_15min(data)
     elif interval_minutes == 30:
-        return resample_ohlcv_30min(data)
+        return resample_5min_to_30min(data)
     else:
         raise ValueError(
             f"Unsupported interval: {interval_minutes} minutes. "
-            f"Supported intervals: 1, 3, 30"
+            f"Supported intervals: 1, 3, 15, 30"
         )
 
 
