@@ -8,7 +8,7 @@ from pathlib import Path
 from tirex.utils.filters import WaveletFilter
 from tirex.utils.ewt import EmpiricalWaveletTransform
 from tirex.utils.plot import save_plot, decomp_plot
-from . import test_data_path, full_timeseries_data, unit_test_plots_path
+from tests import unit_test_plots_path
 
 unit_test_wavelet_plots_path = (unit_test_plots_path / 'wavelet').resolve()
 unit_test_wavelet_plots_path.mkdir(parents=True, exist_ok=True)

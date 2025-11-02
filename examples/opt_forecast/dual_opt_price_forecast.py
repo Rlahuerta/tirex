@@ -493,17 +493,23 @@ def main_opt_trade():
     # run_size = 50
     run_size = 300
 
-    # dt 15
-    # sr_opt15_forecast = pd.Series(dict(window=334, decomplen=430, bclen=3, nsignal=13, outlen=12), name=15)     # swt
-    # sr_opt15_forecast = pd.Series(dict(window=796, decomplen=1126, bclen=7, nsignal=8, outlen=12), name=15)     # emd
-    sr_opt15_forecast = pd.Series(dict(window=472, decomplen=1059, bclen=0, nsignal=18, outlen=12), name=15)     # ewt
+    dict_cfg = dict(
+        swt={
+            15: pd.Series(dict(window=334, decomplen=430, bclen=3, nsignal=13, outlen=12), name=15),
+            60: pd.Series(dict(window=328, decomplen=863, bclen=1, nsignal=3, outlen=8), name=60),
+        },
+        emd={
+            15: pd.Series(dict(window=160, decomplen=1280, bclen=0, nsignal=13, outlen=12), name=15),
+            60: pd.Series(dict(window=796, decomplen=1126, bclen=7, nsignal=8, outlen=8), name=60),
+        },
+        ewt={
+            # 15: pd.Series(dict(window=861, decomplen=3361, bclen=0, nsignal=18, outlen=12), name=15),
+            15: pd.Series(dict(window=446, decomplen=1317, bclen=0, nsignal=12, outlen=12), name=15),
+            60: pd.Series(dict(window=106, decomplen=831, bclen=2, nsignal=16, outlen=8), name=60),
+        },
+    )
 
-    # dt 60
-    # sr_opt60_forecast = pd.Series(dict(window=328, decomplen=863, bclen=1, nsignal=3, outlen=8), name=60)       # swt
-    # sr_opt60_forecast = pd.Series(dict(window=467, decomplen=1335, bclen=1, nsignal=12, outlen=8), name=60)     # emd
-    sr_opt60_forecast = pd.Series(dict(window=106, decomplen=831, bclen=2, nsignal=16, outlen=8), name=60)     # ewt
-
-    pd_opt_forecast = pd.concat([sr_opt15_forecast, sr_opt60_forecast], axis=1).T
+    pd_opt_forecast = pd.concat([dict_cfg[dtype][15], dict_cfg[dtype][60]], axis=1).T
 
     opt_ewt_forecst = DualOptForecast(input_data=df_price_data,
                                       opt_dsvars=pd_opt_forecast,

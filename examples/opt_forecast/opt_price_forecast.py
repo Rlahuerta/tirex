@@ -28,7 +28,6 @@ local_plot_path = (project_local_path / "ewt_plots").resolve()
 local_plot_path.mkdir(exist_ok=True)
 
 
-
 class OptForecast:
 
     def __init__(self,
@@ -91,10 +90,11 @@ class OptForecast:
         timestamp_str = dt_object.strftime("%Y%m%d_%H%M%S")
         dt_time = input_data.index[1] - input_data.index[0]
         num_dt = int(dt_time.total_seconds() / 60)
-        self.csv_file_info = (project_local_path / f"opt_ifo_{dtype}_dt_{num_dt}_forlen_{out_len}_rsize_{run_size}_{timestamp_str}.csv")
+        self.csv_file_info = (
+                    project_local_path / f"opt_ifo_{dtype}_dt_{num_dt}_forlen_{out_len}_rsize_{run_size}_{timestamp_str}.csv")
 
         self.loss_info = {"iter": [], "window": [], "decomplen": [], "bclen": [], "nsignal": [],
-                          "cost": [], "efficiency": [], "performance": [],}
+                          "cost": [], "efficiency": [], "performance": [], }
 
         # Forecast Model and function
         self._model = None
@@ -301,9 +301,9 @@ class OptForecast:
         for k, (signal_id_k, sr_signal_val_k) in enumerate(decomp_signals.items()):
             sr_signal_x_k = sr_signal_val_k.iloc[np_input_idx]
             np_quantiles_y_k, np_mean_y_k = self._forecast(sr_signal_x_k.values,
-                                                     prediction_length=self.out_len + bclen,
-                                                     output_type="numpy",
-                                                     )
+                                                           prediction_length=self.out_len + bclen,
+                                                           output_type="numpy",
+                                                           )
 
             pd_quantiles_y_k = pd.DataFrame(np_quantiles_y_k[0], index=list_output_datetime_idx)
             pd_mean_y_k = pd.Series(np_mean_y_k[0], index=list_output_datetime_idx)
@@ -625,7 +625,7 @@ class OptForecast:
                 for k, candle_k in enumerate(df_y_rs_i.iterrows()):
                     # Add full candle stick price
                     for j, price_j in enumerate(candle_k[1]):
-                        if trailing_stop_order_i.check_order_trigger(price_j) or df_y_rs_i.shape[0] == k-1:
+                        if trailing_stop_order_i.check_order_trigger(price_j) or df_y_rs_i.shape[0] == k - 1:
                             # print(f"Order triggered at market price: {price_k[1]} (iter: {k}), with stop price: {trailing_stop_order_i.current_stop_price}")
                             trailing_order_i["price"].append(price_j)
                             trailing_order_i["index"].append(candle_k[0])
@@ -645,7 +645,8 @@ class OptForecast:
             if self.plot_flag:
                 # plot the trade operation
                 file_path_i = f'{local_plot_path_i}/trade_ops.png'
-                df_inp_tickers_i = self.input_data.loc[sr_x_ft_i.index[-self.plt_len:], ['open', 'close', 'high', 'low']]
+                df_inp_tickers_i = self.input_data.loc[
+                    sr_x_ft_i.index[-self.plt_len:], ['open', 'close', 'high', 'low']]
                 df_inp_tickers_rs_i = self._rescaling(df_inp_tickers_i)
 
                 sr_y_signal_decomp_sum_i = pd_signal_decomp_i.iloc[bclen:, :].sum(axis=1)[-self.plt_len:]
@@ -680,7 +681,6 @@ class OptForecast:
 
 
 def get_design_sample(seed: int = 42) -> np.ndarray:
-
     # Create a sample variables
     np_window = np.arange(100, 2000, step=100)
     np_decomplen = np.arange(500, 8000, step=100)
@@ -714,7 +714,6 @@ def get_design_sample(seed: int = 42) -> np.ndarray:
 
 
 def main_search_forecast():
-
     input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
     dict_price_data = load(input_data_path)
     # dt = 15
@@ -750,8 +749,9 @@ def main_search_forecast():
     dt_object = datetime.datetime.fromtimestamp(time.time())
 
     # Format the datetime object into a string suitable for a filename.
-    timestamp_str = dt_object.strftime("%Y%m%d_%H%M%S")     # YYYYMMDD_HHMMSS is a good format for chronological sorting.
-    opt_file_info = (project_local_path / f"opt_ifo_{dtype}_dt_{dt}_forlen_{out_len}_rsize_{run_size}_{timestamp_str}.csv").resolve()
+    timestamp_str = dt_object.strftime("%Y%m%d_%H%M%S")  # YYYYMMDD_HHMMSS is a good format for chronological sorting.
+    opt_file_info = (
+                project_local_path / f"opt_ifo_{dtype}_dt_{dt}_forlen_{out_len}_rsize_{run_size}_{timestamp_str}.csv").resolve()
 
     list_output = []
     for i, row_i in enumerate(pd_dsvars.iterrows()):
@@ -776,7 +776,6 @@ def main_search_forecast():
 
 
 def main_opt_forecast(opt: bool = True):
-
     input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
     dict_price_data = load(input_data_path)
     seed = 100
@@ -786,9 +785,9 @@ def main_opt_forecast(opt: bool = True):
 
     # dtype = "ewt"
     # dtype = "xwt"
-    dtype = "swt"
+    # dtype = "swt"
     # dtype = "emd"
-    # dtype = "ssa"
+    dtype = "ssa"
 
     # run_size = 30
     # run_size = 100
@@ -848,13 +847,12 @@ def main_opt_forecast(opt: bool = True):
 
         print("Optimal solution:", result.x)
         print("Optimal value:", result.fun)
-        
+
     else:
         pass
 
 
 def main_opt_trade():
-
     input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
     dict_price_data = load(input_data_path)
     # dt = 15
@@ -897,6 +895,7 @@ def main_opt_trade():
     # np_opt_trade = np.array([0.00628666, 0.55794069, 0.78817656, 1.84162112], dtype=float)
     np_opt_trade = np.array([0.0718302, 6.62697033, 0.10341756, 7.19575578], dtype=float)
     fval = opt_ewt_forecst.opt_trade(np_opt_trade)
+
     bounds = [(0.0001, 1.), (0.0001, 10.), (0.0001, 1.), (0.0001, 10.)]
 
     # result = differential_evolution(
@@ -920,5 +919,5 @@ def main_opt_trade():
 
 if __name__ == "__main__":
     # main_search_forecast()
-    # main_opt_forecast()
-    main_opt_trade()
+    main_opt_forecast()
+    # main_opt_trade()
