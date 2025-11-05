@@ -28,7 +28,7 @@ local_plot_path = (project_local_path / "ewt_plots").resolve()
 local_plot_path.mkdir(exist_ok=True)
 
 
-class OptForecast:
+class OptSignalDecompForecast:
 
     def __init__(self,
                  input_data: pd.DataFrame,
@@ -731,16 +731,16 @@ def main_search_forecast():
 
     # run_size = 100
     run_size = 200
-    opt_ewt_forecst = OptForecast(input_data=dict_price_data[dt],
-                                  out_len=out_len,
-                                  inc_len=50,
-                                  plt_len=120,
-                                  seed=seed,
-                                  dtype=dtype,
-                                  ftype="",
-                                  # plot_flag=True,
-                                  run_size=run_size,
-                                  )
+    opt_ewt_forecst = OptSignalDecompForecast(input_data=dict_price_data[dt],
+                                              out_len=out_len,
+                                              inc_len=50,
+                                              plt_len=120,
+                                              seed=seed,
+                                              dtype=dtype,
+                                              ftype="",
+                                              # plot_flag=True,
+                                              run_size=run_size,
+                                              )
 
     # Create a sample variables
     pd_dsvars = get_design_sample(seed=seed)
@@ -807,16 +807,16 @@ def main_opt_forecast(opt: bool = True):
     else:
         raise NotImplementedError
 
-    opt_ewt_forecst = OptForecast(input_data=dict_price_data[dt],
-                                  out_len=out_len,
-                                  inc_len=50,
-                                  plt_len=120,
-                                  seed=seed,
-                                  dtype=dtype,
-                                  ftype="",
-                                  # plot_flag=True,
-                                  run_size=run_size,
-                                  )
+    opt_ewt_forecst = OptSignalDecompForecast(input_data=dict_price_data[dt],
+                                              out_len=out_len,
+                                              inc_len=50,
+                                              plt_len=120,
+                                              seed=seed,
+                                              dtype=dtype,
+                                              ftype="",
+                                              # plot_flag=True,
+                                              run_size=run_size,
+                                              )
 
     if opt:
         # res_i = opt_ewt_forecst.objective_scipy(np_dsvars)
@@ -868,16 +868,16 @@ def main_opt_trade():
 
     run_size = 50
     # run_size = 300
-    opt_ewt_forecst = OptForecast(input_data=dict_price_data[dt],
-                                  out_len=out_len,
-                                  inc_len=50,
-                                  plt_len=120,
-                                  seed=seed,
-                                  dtype=dtype,
-                                  ftype="",
-                                  plot_flag=True,
-                                  run_size=run_size,
-                                  )
+    opt_ewt_forecst = OptSignalDecompForecast(input_data=dict_price_data[dt],
+                                              out_len=out_len,
+                                              inc_len=50,
+                                              plt_len=120,
+                                              seed=seed,
+                                              dtype=dtype,
+                                              ftype="",
+                                              plot_flag=True,
+                                              run_size=run_size,
+                                              )
 
     # dt 15
     # sr_opt_forecast = pd.Series(dict(window=1600, decomplen=1900, bclen=3, nsignal=6))

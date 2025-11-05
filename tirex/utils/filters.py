@@ -63,7 +63,7 @@ class ConvolutionFilter:
             self.list_np_wg.append(np_wg_i)
             self.list_sum_wg.append(np_wg_i.sum())
 
-    def __call__(self, data: npt.NDArray) -> npt.NDArray:
+    def __call__(self, data: np.ndarray | pd.Series):
         """
         Apply the convolution filter to the input data.
 
@@ -76,11 +76,21 @@ class ConvolutionFilter:
 
         np_data_ou = np.zeros(self.adim, dtype=float)
 
+        if isinstance(data, np.ndarray):
+            np_data_in = data
+        elif isinstance(data, pd.Series):
+            np_data_in = data.values
+        else:
+            raise ValueError("Input data must be a NumPy array or a Pandas Series.")
+
         for adim_i in range(self.adim):
-            np_data_i = data[self.list_search[adim_i]]
+            np_data_i = np_data_in[self.list_search[adim_i]]
             np_data_ou[adim_i] = np.dot(np_data_i, self.list_np_wg[adim_i]) / self.list_sum_wg[adim_i]
 
-        return np_data_ou
+        if isinstance(data, np.ndarray):
+            return np_data_ou
+        else:
+            return pd.Series(np_data_ou, index=data.index, name="filtered")
 
     def ticker(self, data: pd.DataFrame, std: bool = False) -> (npt.NDArray, npt.NDArray):
         """
@@ -313,9 +323,10 @@ def ema(data: np.ndarray, n: int) -> np.ndarray:
     return np_ema
 
 
-def quadratic_fit_series(series: pd.Series) -> pd.Series:
+def quadratic_fit_series(series: pd.Series | pd.DataFrame) -> pd.Series:
     x = np.arange(len(series))
     y = series.values
     coeffs = np.polyfit(x, y, 2)
     y_fit = np.polyval(coeffs, x)
+
     return pd.Series(y_fit, index=series.index)

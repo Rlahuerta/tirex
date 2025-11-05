@@ -500,74 +500,69 @@ def dual_plot_mpl_ticker(input_tickers: pd.DataFrame,
     time_increment = int(input_tickers.index.to_series().diff().mean().total_seconds() / 60)
 
     # Plotting candlesticks
-    lc_input_tickers = apply_minmax_inverse_scaler(kwargs.get("rescale"), input_tickers)
-
-    _add_candlestick(ax, lc_input_tickers, dt=time_increment)
-    ax.axvline(lc_input_tickers['close'].index[-1], color='red', linestyle='--')
+    _add_candlestick(ax, input_tickers, dt=time_increment)
+    ax.axvline(input_tickers['close'].index[-1], color='red', linestyle='--')
 
     if 'swt15' in kwargs.keys():
-        np_swt15 = apply_minmax_inverse_scaler(kwargs.get("rescale"), kwargs['swt15']).values.flatten()
-        ax.plot(kwargs['swt15'].index, np_swt15, color='orange', label='SWT (15 min)', linewidth=1.)
+        ax.plot(kwargs['swt15'].index, kwargs['swt15'], color='orange', label='SWT (15m)', linewidth=1.)
 
     if 'swt60' in kwargs.keys():
-        np_swt60 = apply_minmax_inverse_scaler(kwargs.get("rescale"), kwargs['swt60']).values.flatten()
-        ax.plot(kwargs['swt60'].index, np_swt60, linestyle=':', color='black', label='SWT (60 min)', linewidth=1.)
+        ax.plot(kwargs['swt60'].index, kwargs['swt60'], linestyle=':', color='black', label='SWT (60m)', linewidth=1.)
 
     # Prediction and other overlays
     if isinstance(forward_tickers, pd.DataFrame):
-        lc_forward_tickers = apply_minmax_inverse_scaler(kwargs.get("rescale"),
-                                                         forward_tickers[['open', 'close', 'high', 'low']])
-        _add_candlestick(ax, lc_forward_tickers, dt=time_increment)
+        _add_candlestick(ax, forward_tickers[['open', 'close', 'high', 'low']], dt=time_increment)
 
     # Prediction and other overlays
     if dt15_output_tickers is not None:
-        lc_dt15_output_tickers = apply_minmax_inverse_scaler(kwargs.get("rescale"), dt15_output_tickers)
+        if 'mean' in dt15_output_tickers.keys():
+            ax.plot(dt15_output_tickers['mean'].index, dt15_output_tickers['mean'].values,
+                    color='purple', label='Pred-Mean (15m)', linewidth=2, linestyle="-.")
 
-        if 'mean' in lc_dt15_output_tickers.keys():
-            ax.plot(lc_dt15_output_tickers['mean'].index, lc_dt15_output_tickers['mean'].values,
-                    color='purple', label='Pred-Mean (15 min)', linewidth=2, linestyle="-.")
+        if 'ft_mean' in dt15_output_tickers.keys():
+            ax.plot(dt15_output_tickers['ft_mean'].index, dt15_output_tickers['ft_mean'].values,
+                    color='blue', label='ft-Pred-Mean (15m)', linewidth=1, linestyle="-.")
 
         if any('quantile' in key for key in dt15_output_tickers.keys()):
-            quantile_lower_bound = lc_dt15_output_tickers.iloc[:, 0].values
-            quantile_upper_bound = lc_dt15_output_tickers.iloc[:, 8].values
+            quantile_lower_bound = dt15_output_tickers.iloc[:, 0].values
+            quantile_upper_bound = dt15_output_tickers.iloc[:, 8].values
 
             ax.fill_between(
                 dt15_output_tickers.index, quantile_lower_bound, quantile_upper_bound,
-                color="#d94e4e", alpha=0.1, label="Forecast 10% - 90% Quantiles (15 min)"
+                color="#d94e4e", alpha=0.1, label="Forecast 10% - 90% Quantiles (15m)"
             )
 
     if dt60_output_tickers is not None:
-        lc_dt60_output_tickers = apply_minmax_inverse_scaler(kwargs.get("rescale"), dt60_output_tickers)
+        if 'mean' in dt60_output_tickers.keys():
+            ax.plot(dt60_output_tickers['mean'].index, dt60_output_tickers['mean'].values,
+                    color='purple', label='Pred-Mean (60m)', linewidth=3, linestyle=":")
 
-        if 'mean' in lc_dt60_output_tickers.keys():
-            ax.plot(lc_dt60_output_tickers['mean'].index, lc_dt60_output_tickers['mean'].values,
-                    color='purple', label='Pred-Mean (60 min)', linewidth=3, linestyle=":")
+        if 'ft_mean' in dt60_output_tickers.keys():
+            ax.plot(dt60_output_tickers['ft_mean'].index, dt60_output_tickers['ft_mean'].values,
+                    color='blue', label='ft-Pred-Mean (60m)', linewidth=1, linestyle=":")
 
-        if any('quantile' in key for key in lc_dt60_output_tickers.keys()):
-            quantile_lower_bound = lc_dt60_output_tickers.iloc[:, 0].values
-            quantile_upper_bound = lc_dt60_output_tickers.iloc[:, 8].values
+        if any('quantile' in key for key in dt60_output_tickers.keys()):
+            quantile_lower_bound = dt60_output_tickers.iloc[:, 0].values
+            quantile_upper_bound = dt60_output_tickers.iloc[:, 8].values
 
             ax.fill_between(
                 dt60_output_tickers.index, quantile_lower_bound, quantile_upper_bound,
-                color="royalblue", alpha=0.1, label="Forecast 10% - 90% Quantiles (60 min)"
+                color="royalblue", alpha=0.1, label="Forecast 10% - 90% Quantiles (60m)"
             )
 
     if 'support' in kwargs.keys():
-        np_support = apply_minmax_inverse_scaler(kwargs.get("rescale"), kwargs['support']).values
-        ax.plot(kwargs['support'].index, np_support, "o",
+        ax.plot(kwargs['support'].index, kwargs['support'].values, "o",
                 markersize=5, alpha=0.5, color='black', label='Support Lvl')
 
     if 'trade_bounds' in kwargs.keys():
         if 'stop_loss' in kwargs['trade_bounds'].keys():
             if kwargs['trade_bounds'].shape[0] > 0:
-                np_stop_loss = apply_minmax_inverse_scaler(kwargs.get("rescale"), kwargs['trade_bounds']['stop_loss']).values
-                ax.plot(kwargs['trade_bounds'].index, np_stop_loss,
+                ax.plot(kwargs['trade_bounds'].index, kwargs['trade_bounds']['stop_loss'].values,
                             color='red', alpha=0.4, label='Stop Loss', linewidth=2, linestyle="--")
 
         if 'take_profit' in kwargs['trade_bounds'].keys():
             if kwargs['trade_bounds'].shape[0] > 0:
-                np_take_profit = apply_minmax_inverse_scaler(kwargs.get("rescale"), kwargs['trade_bounds']['take_profit']).values
-                ax.plot(kwargs['trade_bounds'].index, np_take_profit,
+                ax.plot(kwargs['trade_bounds'].index, kwargs['trade_bounds']['take_profit'].values,
                         color='blue', alpha=0.4, label='Take Profit', linewidth=2, linestyle="--")
 
     # Formatting the x-axis as dates

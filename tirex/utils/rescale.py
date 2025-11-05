@@ -16,11 +16,17 @@ def apply_minmax_inverse_scaler(scaler: MinMaxScaler, data: pd.DataFrame | pd.Se
 
     if scaler is not None:
         if isinstance(data, pd.Series):
-            scaled = scaler.inverse_transform(data.values.reshape(-1, 1)).flatten()
-            return pd.Series(scaled, index=data.index, name=data.name)
+            if data.shape[0] > 0:
+                scaled = scaler.inverse_transform(data.values.reshape(-1, 1)).flatten()
+                return pd.Series(scaled, index=data.index, name=data.name)
+            else:
+                return pd.Series([])
         elif isinstance(data, pd.DataFrame):
-            scaled = scaler.inverse_transform(data.values)
-            return pd.DataFrame(scaled, index=data.index, columns=data.columns)
+            if data.shape[0] > 0:
+                scaled = scaler.inverse_transform(data.values)
+                return pd.DataFrame(scaled, index=data.index, columns=data.columns)
+            else:
+                return pd.DataFrame([])
         else:
             raise TypeError("Input must be a pandas DataFrame or Series.")
     else:
