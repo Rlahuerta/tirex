@@ -261,9 +261,9 @@ class OptSignalDecompForecast:
 
         if self.ftype == "convolution":
             if self.convolution_filter is None:
-                self.convolution_filter = ConvolutionFilter(adim=input_signal.size, length=flen)
+                self.convolution_filter = ConvolutionFilter(adim=input_signal.size, window=flen)
             elif self.convolution_filter.adim != input_signal.shape[0]:
-                self.convolution_filter = ConvolutionFilter(adim=input_signal.size, length=flen)
+                self.convolution_filter = ConvolutionFilter(adim=input_signal.size, window=flen)
 
             return pd.Series(self.convolution_filter(input_signal.values), index=input_signal.index)
 

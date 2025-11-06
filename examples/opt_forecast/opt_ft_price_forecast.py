@@ -37,6 +37,7 @@ class OptSignalFilterForecast:
                  plt_len: int = 120,
                  inc_len: int = 500,
                  run_size: int = 50,
+                 ftype: str = 'backward',
                  plot_flag: bool = False,
                  seed: int = 42,
                  debug: bool = False,
@@ -47,13 +48,14 @@ class OptSignalFilterForecast:
 
         Args:
             input_data (pd.DataFrame): Input data frame with a 'close' column.
-            out_len (int): Number of future time steps to forecast.
-            plt_len (int): Window length for plotting historical data.
-            inc_len (int): Increment length for sliding evaluation windows.
-            run_size (int): Number of evaluation runs to perform.
-            plot_flag (bool): Whether to enable plotting of results.
-            seed (int): Random seed for reproducibility.
-            debug (bool): If True, use mock forecast model.
+            out_len (int):      Number of future time steps to forecast.
+            plt_len (int):      Window length for plotting historical data.
+            inc_len (int):      Increment length for sliding evaluation windows.
+            run_size (int):     Number of evaluation runs to perform.
+            ftype (str):        Type of convolution filter to use.
+            plot_flag (bool):   Whether to enable plotting of results.
+            seed (int):         Random seed for reproducibility.
+            debug (bool):       If True, use mock forecast model.
         """
 
         self.input_data = input_data
@@ -68,6 +70,7 @@ class OptSignalFilterForecast:
 
         self._iter = 0
         self._debug = debug
+        self._ftype = ftype
         self._prd_dsvars = pd.Series()
 
         # Save csv file with optimization results
@@ -233,7 +236,7 @@ class OptSignalFilterForecast:
         ticker_keys = ['open', 'close', 'high', 'low']
 
         ft_idx = np.arange(0, length, dtype=int)
-        conv_filter = ConvolutionFilter(adim=length, window=window, penal=penal, ftype='backward')
+        conv_filter = ConvolutionFilter(adim=length, window=window, penal=penal, ftype=self._ftype)
 
         for i, idx_i in enumerate(tqdm(self.np_idx_inc_eval[:self.run_size], desc="Processing")):
             ft_idx_i = ft_idx + (idx_i - length)
@@ -275,9 +278,9 @@ class OptSignalFilterForecast:
                 out_idx_i = ft_idx_i[-1] + np.arange(1, 31)
 
                 # For verification only
-                plot_mpl_ticker(input_tickers=self.input_data[ticker_keys].iloc[ft_idx_i, :][-120:],
+                plot_mpl_ticker(input_tickers=self.input_data[ticker_keys].iloc[ft_idx_i, :][-self.plt_len:],
                                 output_tickers=self.input_data[ticker_keys].iloc[out_idx_i, :],
-                                ft=apply_minmax_inverse_scaler(self.scaler_data, sr_ft_x_i)[-120:],
+                                ft=apply_minmax_inverse_scaler(self.scaler_data, sr_ft_x_i)[-self.plt_len:],
                                 quantile=apply_minmax_inverse_scaler(self.scaler_data, pd_ft_forecast_i.loc[:, [0, 1, 2, 3, 4, 5, 6, 7, 8]]),
                                 Prediction=apply_minmax_inverse_scaler(self.scaler_data, pd_ft_forecast_i["mean"]),
                                 plot_name=f'{local_plot_path_i}/ft_signal_pred.png',
@@ -387,31 +390,33 @@ def main_opt_forecast(opt: bool = True):
     if dt == 15:
         out_len = 12
         # len, win, penal
-        # np_dsvars = np.asarray([500, 12, 1])
-        sr_dsvars = pd.Series({'length': 500, 'window': 12, 'penal': 1.})
+        sr_dsvars = pd.Series({'length': 1651, 'window': 44, 'penal': 1.})     # backward
+        sr_dsvars = pd.Series({'length': 723, 'window': 27, 'penal': 1.})     # full
         bounds = [(100, 2000), (2, 50), (1, 3)]  # dt15
 
     elif dt == 60:
         out_len = 8
         # len, win, penal
-        # np_dsvars = np.asarray([200, 4, 1])
-        sr_dsvars = pd.Series({'length': 200, 'window': 6, 'penal': 1.})
+        # sr_dsvars = pd.Series({'length': 100, 'window': 8, 'penal': 1.})     # random sample
+        sr_dsvars = pd.Series({'length': 963, 'window': 44, 'penal': 1.})     # backward
+        # sr_dsvars = pd.Series({'length': 156, 'window': 22, 'penal': 1.})     # full
         bounds = [(100, 1500), (2, 50), (1, 3)]  # dt60
 
     else:
         raise NotImplementedError
 
     opt_ft_forecst = OptSignalFilterForecast(input_data=dict_price_data[dt],
-                                              out_len=out_len,
-                                              inc_len=50,
-                                              plt_len=120,
-                                              seed=seed,
-                                              # plot_flag=True,
-                                              run_size=run_size,
-                                              )
+                                             out_len=out_len,
+                                             inc_len=50,
+                                             plt_len=120,
+                                             seed=seed,
+                                             ftype="full",
+                                             plot_flag=not opt,
+                                             run_size=run_size,
+                                             )
 
-    # res = opt_ewt_forecst.objective(sr_dsvars)
-    # res = opt_ewt_forecst.objective_scipy(sr_dsvars.values)
+    # res = opt_ft_forecst.objective(sr_dsvars)
+    res = opt_ft_forecst.objective_scipy(sr_dsvars.values)
 
     if opt:
         integrality = [True, True, True]
@@ -444,4 +449,5 @@ def main_opt_forecast(opt: bool = True):
 
 
 if __name__ == "__main__":
-    main_opt_forecast()
+    main_opt_forecast(opt=False)
+    # main_opt_forecast(opt=True)

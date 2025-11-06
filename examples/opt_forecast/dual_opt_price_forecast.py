@@ -38,10 +38,9 @@ class DualOptForecast:
                  inc_len: int = 500,
                  run_size: int = 50,
                  dtype: str = "ewt",
-                 ftype: str = "convolution",
+                 ftype: str = "backward",
                  plot_flag: bool = False,
                  seed: int = 42,
-                 debug: bool = False,
                  **kwargs,
                  ):
         """
@@ -49,12 +48,15 @@ class DualOptForecast:
 
         Args:
             input_data (pd.DataFrame): Input data frame with a 'close' column.
-            out_len (int): Number of future time steps to forecast.
-            plt_len (int): Window length for plotting historical data.
-            inc_len (int): Increment length for sliding evaluation windows.
-            run_size (int): Number of evaluation runs to perform.
-            dtype (str): Decomposition type ('ewt', 'xwt', 'emd', 'ssa').
-            ftype (str): Filter type ('convolution' or none).
+            out_len (int):      Number of future time steps to forecast.
+            plt_len (int):      Window length for plotting historical data.
+            inc_len (int):      Increment length for sliding evaluation windows.
+            run_size (int):     Number of evaluation runs to perform.
+            dtype (str):        Decomposition type ('ewt', 'xwt', 'emd', 'ssa').
+            ftype (str):        The type of filter to use:
+                                    - 'full': Symmetric/non-causal filter (looks both directions)
+                                    - 'forward': Causal filter (looks only forward, no past leakage)
+                                    - 'backward': Anti-causal filter (looks only backward, no future leakage)
             plot_flag (bool): Whether to enable plotting of results.
             seed (int): Random seed for reproducibility.
             debug (bool): If True, use mock forecast model.
@@ -76,13 +78,18 @@ class DualOptForecast:
 
         self.dtype = dtype
         self.ftype = ftype
-        self.ewt = EmpiricalWaveletTransform()
-        self._ft_len = 500
-        self._ft_win = 6
-        self.convolve_filter = ConvolutionFilter(adim=self._ft_len, length=self._ft_win)
+
+        self._ft15_len = 1651
+        self._ft15_win = 44
+        self._ft60_len = 963
+        self._ft60_win = 44
+
+        self.convolve_ft15 = ConvolutionFilter(adim=self._ft15_len, window=self._ft15_win, ftype=self.ftype)
+        self.convolve_ft60 = ConvolutionFilter(adim=self._ft60_len, window=self._ft60_win, ftype=self.ftype)
 
         config = {"processes": 1, "spline_kind": 'akima', "DTYPE": float}
         self.emd = ICEEMDAN(trials=20, max_imf=-1, **config)
+        self.ewt = EmpiricalWaveletTransform()
 
         self.ssa_wlen = 20  # Window length for SSA
 
@@ -200,7 +207,6 @@ class DualOptForecast:
             self,
             signal: pd.Series,
             out_len: int,
-            bc_len: int,
             plot_path: Optional[Path] = None,
             **kwargs,
     ) -> pd.DataFrame:
@@ -209,11 +215,20 @@ class DualOptForecast:
         np_output_idx = np_index[signal.shape[0]:]
 
         dt_time = signal.index[1] - signal.index[0]
+        num_dt = int(dt_time.total_seconds() / 60)
         list_output_datetime_idx = create_time_index(dt_time, signal.index[-1], np_output_idx.size)
 
-        # FIXME: considerar inp len do filtro
-        sr_signal_x = signal.iloc[-self._ft_len:]
-        sr_ft_signal_x = self.convolve_filter(sr_signal_x)
+        sr_signal_x_full = self.sr_data_rs.loc[:signal.index[-1]]
+
+        if num_dt == 15:
+            sr_signal_x = sr_signal_x_full.iloc[-self._ft15_len:]
+            sr_ft_signal_x = self.convolve_ft15(sr_signal_x)
+        elif num_dt == 60:
+            sr_signal_x = sr_signal_x_full.iloc[-self._ft60_len:]
+            sr_ft_signal_x = self.convolve_ft60(sr_signal_x)
+        else:
+            raise NotImplementedError(f"Unsupported dt_time: {dt_time}. Use 15 or 60 minutes.")
+
         np_quantiles_y, np_mean_y = self._forecast(sr_ft_signal_x.values,
                                                    prediction_length=out_len,
                                                    output_type="numpy",
@@ -228,8 +243,6 @@ class DualOptForecast:
         if self.plot_flag and plot_path is not None:
             num_dt = int(dt_time.total_seconds() / 60)
             plt_kwargs = dict(save_path=f'{plot_path}/conv_filter_dt{num_dt}_pred.png')
-            plt_kwargs["rescale"] = self.scaler_data
-
             plot_fc(ctx=sr_ft_signal_x.iloc[-self.plt_len:], quantile_fc=pd_quantiles_y, **plt_kwargs)
 
         return pd.concat([pd_quantiles_y, sr_mean_y, sr_poly2_y], axis=1)
@@ -369,7 +382,6 @@ class DualOptForecast:
 
             pd_ft_forecast_signal_k = self._forecast_signal(sr_x_dt_k,
                                                             out_len=self.opt_dsvars.loc[dt_k, "outlen"],
-                                                            bc_len=self.opt_dsvars.loc[dt_k, "bclen"],
                                                             plot_path=plot_path)
 
             pd_forecast_multi_signals_k = pd.concat([pd_forecast_multi_signals_k,
@@ -560,7 +572,8 @@ def main_opt_trade():
             60: pd.Series(dict(window=328, decomplen=863, bclen=1, nsignal=3, outlen=8, dtype="swt"), name=60),
         },
         emd={
-            15: pd.Series(dict(window=160, decomplen=1280, bclen=0, nsignal=13, outlen=12, dtype="emd"), name=15),
+            # 15: pd.Series(dict(window=160, decomplen=1280, bclen=0, nsignal=13, outlen=12, dtype="emd"), name=15),
+            15: pd.Series(dict(window=135, decomplen=649, bclen=1, nsignal=11, outlen=12, dtype="emd"), name=15),
             60: pd.Series(dict(window=796, decomplen=1126, bclen=7, nsignal=8, outlen=8, dtype="emd"), name=60),
         },
         ewt={
