@@ -40,11 +40,10 @@ def plot_fc(ctx: pd.Series,
     if title is not None:
         fig.suptitle(title)
 
-    np_ctx = apply_minmax_inverse_scaler(kwargs.get("rescale"), ctx).values
-    ax.plot(ctx.index, np_ctx, label="Ground Truth Context", color="#4a90d9")
+    ax.plot(ctx.index, ctx.values, label="Ground Truth Context", color="#4a90d9")
 
     if quantile_fc is not None:
-        np_quantile_fc = apply_minmax_inverse_scaler(kwargs.get("rescale"), quantile_fc).values
+        np_quantile_fc = quantile_fc.values
         median_forecast = np_quantile_fc[:, 4]
         lower_bound = np_quantile_fc[:, 0]
         upper_bound = np_quantile_fc[:, 8]
@@ -56,20 +55,17 @@ def plot_fc(ctx: pd.Series,
         )
 
     if real_future_values is not None:
-        np_real_future_values = apply_minmax_inverse_scaler(kwargs.get("rescale"), real_future_values).values.flatten()
-        ax.plot(real_future_values.index, np_real_future_values,
+        ax.plot(real_future_values.index, real_future_values.values.flatten(),
                 label="Ground Truth Future", color="#4a90d9", linestyle=":")
 
     if decomp_sum is not None:
-        np_decomp_sum = apply_minmax_inverse_scaler(kwargs.get("rescale"), decomp_sum).values.flatten()
-        ax.plot(decomp_sum.index, np_decomp_sum, label="EWT SUM", color="grey", alpha=0.5, linestyle=":")
+        ax.plot(decomp_sum.index, decomp_sum.values.flatten(), label="EWT SUM", color="grey", alpha=0.5, linestyle=":")
 
     if full_timeseries is not None:
-        np_full_timeseries = apply_minmax_inverse_scaler(kwargs.get("rescale"), full_timeseries).values.flatten()
-        ax.plot(full_timeseries.index, np_full_timeseries, color="grey", alpha=0.5, linestyle=":")
+        ax.plot(full_timeseries.index, full_timeseries.values.flatten(), color="grey", alpha=0.5, linestyle=":")
 
     if bcs is not None:
-        np_bcs = apply_minmax_inverse_scaler(kwargs.get("rescale"), bcs).values.flatten()
+        np_bcs = bcs.values.flatten()
         ax.plot(bcs.index, np_bcs, alpha=0.5, color="red", label="boundary")
         ax.plot(bcs.index, np_bcs, ".", color="black")
 
@@ -413,6 +409,9 @@ def plot_mpl_ticker(input_tickers: pd.DataFrame,
 
     if 'swt' in kwargs.keys():
         ax.plot(kwargs['swt'].index, kwargs['swt'].values, color='orange', label='SWT', linewidth=1.)
+
+    if 'ft' in kwargs.keys():
+        ax.plot(kwargs['ft'].index, kwargs['ft'].values, color='orange', label='conv-ft', linewidth=1.)
 
     # Prediction and other overlays
     if isinstance(output_tickers, pd.DataFrame):

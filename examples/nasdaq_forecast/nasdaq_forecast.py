@@ -64,7 +64,7 @@ def iceemdan_forecast():
     inp_idx = full_idx[:inp_len]
     out_idx = full_idx[inp_len:]
 
-    convolution_filter = ConvolutionFilter(adim=inp_len, length=3)
+    convolution_filter = ConvolutionFilter(adim=inp_len, window=3)
 
     config = {"processes": 1, "spline_kind": 'akima', "DTYPE": float}
     iceemdan = ICEEMDAN(trials=20, max_imf=-1, **config)
@@ -173,8 +173,8 @@ def ewt_forecast():
     inp_idx = full_idx[:inp_len]
     out_idx = full_idx[inp_len:] - bclen
 
-    convolution_filter = ConvolutionFilter(adim=inp_len, length=3)
-    convolution_filter_smooth = ConvolutionFilter(adim=inp_len, length=20)
+    convolution_filter = ConvolutionFilter(adim=inp_len, window=3)
+    convolution_filter_smooth = ConvolutionFilter(adim=inp_len, window=20)
 
     # Initialize EWT
     ewt = EmpiricalWaveletTransform()

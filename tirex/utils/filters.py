@@ -18,19 +18,27 @@ class FilterType(Enum):
 class ConvolutionFilter:
     __name__ = 'ConvolutionFilter'
 
-    def __init__(self, adim: int, length: int, penal: float = 1., ftype: str = "full"):
+    def __init__(self, adim: int, window: int, penal: float = 1., ftype: str = "full"):
         """
         Initialize the ConvolutionFilter class.
 
-        :param adim:        The dimension of the input data.
-        :param length:      The length of the filter.
+        :param adim:        The dimension length of the input data.
+        :param window:      The window length of the filter.
         :param penal:       The penalization factor for the filter weights (default=1.0).
+                           Higher values create sharper weight distributions.
+        :param ftype:       The type of filter to use:
+                           - 'full': Symmetric/non-causal filter (looks both directions)
+                           - 'forward': Causal filter (looks only forward, no past leakage)
+                           - 'backward': Anti-causal filter (looks only backward, no future leakage)
+        
+        The weight function follows: w(d) = |1 - d/dist|^penal where d is the distance
+        from the current position. At array boundaries, filters use only available data.
         """
 
-        dist = length / 2
+        dist = window / 2
         np_arg_idx = np.arange(0, adim)
 
-        self.length = int(2. * (length // 2) + 1)
+        self.length = int(2. * (window // 2) + 1)
         self.adim = adim
 
         self.list_search = []
@@ -39,22 +47,22 @@ class ConvolutionFilter:
 
         for adim_i in range(self.adim):
             if ftype == "full":
+                # symmetric filter
                 np_dist_i = np.abs(np_arg_idx - adim_i)
                 np_idx_i = np.where(np_dist_i <= dist)[0]
                 np_dist_nrm_i = np_dist_i[np_idx_i]
                 np_wg_i = np.abs((np_dist_nrm_i - dist) / dist) ** penal
 
             elif ftype == "forward":
-                # FIXME
                 np_dist_i = np_arg_idx - adim_i
-                np_idx_i = np.where(np_dist_i <= dist)[0]
-                np_dist_nrm_i = np_dist_i[np_idx_i]
-                np_wg_i = np.abs((np_dist_nrm_i - dist) / dist) ** penal
+                np_idx_i = np.where((np_dist_i >= 0) & (np_dist_i <= dist))[0]
+                np_dist_nrm_i = np_dist_i[np_idx_i] - adim_i
+                np_wg_i = np.abs((np_dist_nrm_i - self.length) / self.length) ** penal
 
             elif ftype == "backward":
-                np_idx_i = np.where(np_arg_idx <= adim_i)[0][:self.length]
+                np_idx_i = np.where(np_arg_idx <= adim_i)[0][-self.length:]
                 np_dist_nrm_i = adim_i - np_arg_idx[np_idx_i]
-                np_wg_i = np.abs((np_dist_nrm_i - length) / length)
+                np_wg_i = np.abs((np_dist_nrm_i - self.length) / self.length) ** penal
 
             else:
                 raise ValueError("Invalid filter type!")
