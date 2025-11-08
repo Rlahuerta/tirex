@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from pathlib import Path
 import time
 import datetime
@@ -7,26 +8,19 @@ import pandas as pd
 
 from tqdm import tqdm
 from joblib import load
-from scipy.optimize import differential_evolution, direct, minimize, LinearConstraint
+from scipy.optimize import differential_evolution, LinearConstraint
 from sklearn.preprocessing import MinMaxScaler
 from typing import Tuple, List, Dict, Any, Optional, Union, Callable
 
 from tirex import ForecastModel, load_model
 from tirex.utils.filters import ConvolutionFilter, quadratic_fit_series
-from tirex.utils.ewt import EmpiricalWaveletTransform
-from tirex.utils.ceemdan import ICEEMDAN
-from tirex.utils.ssa import ssa
 from tirex.utils.time import create_time_index
 from tirex.utils.path import cleanup_directory
 from tirex.utils.plot import plot_fc, plot_mpl_ticker
-from tirex.utils.trade import TrailingStopOrder
 from tirex.utils.rescale import apply_minmax_inverse_scaler
 
 # Add the project root to the Python path
 project_local_path = Path(__file__).resolve().parent
-
-local_plot_path = (project_local_path / "ewt_plots").resolve()
-local_plot_path.mkdir(exist_ok=True)
 
 
 class OptSignalFilterForecast:

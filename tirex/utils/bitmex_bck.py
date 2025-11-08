@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+"""
+BitMEX Authentication Module (backup version).
+
+This module provides authentication strategies for BitMEX API requests.
+"""
 import os
 import json
 import warnings
