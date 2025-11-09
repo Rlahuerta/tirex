@@ -9,7 +9,8 @@ import unittest
 from unittest.mock import Mock, patch
 import pandas as pd
 import numpy as np
-# from pathlib import Path
+import matplotlib.pyplot as plt
+from pathlib import Path
 
 from tirex.utils.bitmex_latest import (
     get_latest_bitmex_data,
@@ -84,6 +85,9 @@ class TestBitMEXLatest(unittest.TestCase):
         self.assertIsInstance(df, pd.DataFrame)
         self.assertIsNotNone(fig)
         self.assertEqual(len(df), 96)
+        
+        # Clean up figure
+        plt.close(fig)
     
     @patch('tirex.utils.bitmex_latest.BitMEX')
     def test_fetch_and_plot_latest_btc(self, mock_bitmex_class):
@@ -105,6 +109,9 @@ class TestBitMEXLatest(unittest.TestCase):
         call_args = mock_instance.get_net_chart.call_args
         self.assertEqual(call_args[1]['cpair'], 'XBTUSD')
         self.assertEqual(call_args[1]['dt'], 3)  # dt=15 maps to dt_internal=3
+        
+        # Clean up figure
+        plt.close(fig)
     
     def test_plot_ticker_with_thick_lines(self):
         """Test plot generation with thick lines."""
@@ -119,6 +126,9 @@ class TestBitMEXLatest(unittest.TestCase):
         # Assertions
         self.assertIsNotNone(fig)
         self.assertEqual(fig.get_suptitle(), "Test Plot")
+        
+        # Clean up figure
+        plt.close(fig)
     
     def test_parameter_validation(self):
         """Test parameter validation."""

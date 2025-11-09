@@ -8,6 +8,7 @@ and visualize recent Bitcoin data with thick lines.
 """
 
 import logging
+import matplotlib.pyplot as plt
 from pathlib import Path
 
 from tirex.utils.bitmex_latest import (
@@ -132,11 +133,16 @@ if __name__ == '__main__':
         print("="*70)
         
         # Optionally save plots
-        output_dir = Path(__file__).parent / "plots" / "ticker"
-        output_dir.mkdir(exist_ok=True)
-        fig1.savefig(output_dir / 'demo1_basic.png', dpi=300, bbox_inches='tight')
-        fig2.savefig(output_dir / 'demo2_convenience.png', dpi=300, bbox_inches='tight')
-        print(f"\nPlots saved to {output_dir}/")
+        # output_dir = Path('demo_outputs')
+        # output_dir.mkdir(exist_ok=True)
+        # fig1.savefig(output_dir / 'demo1_basic.png', dpi=300, bbox_inches='tight')
+        # fig2.savefig(output_dir / 'demo2_convenience.png', dpi=300, bbox_inches='tight')
+        # print(f"\nPlots saved to {output_dir}/")
+        
+        # Clean up figures to prevent memory warning
+        plt.close(fig1)
+        plt.close(fig2)
+        plt.close('all')
         
     except Exception as e:
         logger.error(f"Demo failed: {e}", exc_info=True)

@@ -91,7 +91,17 @@ def plot_ticker_with_thick_lines(
     
     # Add candlestick chart
     _add_candlestick(ax, ticker_data, dt=dt)
-
+    
+    # Add thick close price line for visibility and legend
+    ax.plot(
+        ticker_data.index,
+        ticker_data['close'],
+        color='blue',
+        label='Close Price',
+        linewidth=linewidth,
+        alpha=0.7,
+        zorder=3
+    )
     
     # Format x-axis for time display
     ax.xaxis_date()
@@ -118,7 +128,7 @@ def plot_ticker_with_thick_lines(
     ax.grid(which='minor', alpha=0.2, axis='x')
     ax.grid(which='minor', alpha=0.2)
     ax.grid(which='major', alpha=0.5)
-    ax.legend(fontsize=10)
+    ax.legend(fontsize=10, loc='best')
     
     plt.tight_layout()
     

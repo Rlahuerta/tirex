@@ -30,7 +30,6 @@ local_plot_path.mkdir(exist_ok=True)
 class DualOptForecast:
 
     def __init__(self,
-                 input_data: pd.DataFrame,
                  opt_dsvars: pd.DataFrame,
                  plt_len: int = 120,
                  inc_len: int = 500,
@@ -60,7 +59,13 @@ class DualOptForecast:
             debug (bool): If True, use mock forecast model.
         """
 
-        self.input_data = input_data
+        # Get the number of hours
+        hdt15 = opt_dsvars.loc[15, "decomplen"] // 4
+        hdt60 = opt_dsvars.loc[60, "decomplen"]
+        nhours = int(1.1 * max(hdt15, hdt60))
+
+        df_price_data, fig = get_latest_bitmex_data(symbol='XBTUSD', hours=nhours, dt=15, plot=False)
+        self.input_data = df_price_data
 
         # Forecast Variables
         self.opt_dsvars = opt_dsvars
@@ -96,7 +101,7 @@ class DualOptForecast:
         self._model_path = (Path(__file__).parent.parent.parent / "model" / "model.ckpt").resolve()
         self._forecast = None
 
-        self.df_data = input_data["close"]
+        self.df_data = self.input_data["close"]
         self.scaler_data = MinMaxScaler(feature_range=(0., 100.))
 
         self.np_data_idx = np.arange(len(self.df_data))
@@ -120,19 +125,6 @@ class DualOptForecast:
         """
         # preprocessing the joblib data
 
-        list_incs = []
-        inc_i = 3000
-        max_length = self.df_data.shape[0] - (self.out_len + 10)
-        for i in range(1000):
-            if inc_i > max_length:
-                break
-            list_incs.append(inc_i)
-            inc_i += self.inc_len
-
-        self.np_idx_inc_eval = np.array(list_incs, dtype=int)
-        np.random.seed(self.seed)
-        np.random.shuffle(self.np_idx_inc_eval)
-
         np_data_rs = self.scaler_data.fit_transform(self.df_data.values.reshape(-1, 1)).flatten()
         self.sr_data_rs = pd.Series(np_data_rs, index=self.input_data.index)
 
@@ -148,6 +140,24 @@ class DualOptForecast:
         except Exception as e:
             print(f"Error loading model: {e}")
             return
+
+    def update_input_data(self):
+        """
+        Update the input data and re-preprocess.
+        """
+
+        new_data, _ = get_latest_bitmex_data(symbol='XBTUSD', hours=4, dt=15, plot=False)
+
+        # Concatenate and remove duplicates by index
+        combined_data = pd.concat([self.input_data, new_data])
+        combined_data = combined_data[~combined_data.index.duplicated(keep='last')]
+        combined_data = combined_data.sort_index()
+
+        self.input_data = combined_data
+        self.df_data = self.input_data["close"]
+
+        np_data_rs = self.scaler_data.transform(self.df_data.values.reshape(-1, 1)).flatten()
+        self.sr_data_rs = pd.Series(np_data_rs, index=self.input_data.index)
 
     def _signal_decomposition(self,
                               input_signal: pd.Series,
@@ -430,10 +440,12 @@ class DualOptForecast:
         # Get Support Points (FIXME)
         # sr_support_points_i = self._get_support_points(dtm_x[15])
 
-        # Reference (Future Values)
-        # end_dt15 = dict_signal_process_i[15]["forecast"].index[dt15_bclen:][0] - dt15_time
-
+        # Config for plotting
+        dt_object = datetime.datetime.fromtimestamp(time.time())
+        self.str_timestamp = dt_object.strftime("%Y%m%d_%H%M%S")
         file_path = f'{local_plot_path}/{self.str_timestamp}_dual_forecast.png'
+
+        # Prepare data for plotting
         df_inp_tickers = self.input_data.loc[dtm_x[15].index[-self.plt_len:], ticker_keys]
 
         ## Real
@@ -454,14 +466,12 @@ class DualOptForecast:
 
         dual_plot_mpl_ticker(df_inp_tickers, **pkwargs)
 
-        test = 1.
-
 
 def main_opt_prediction():
 
     # Get the latest data
-    df_price_data, fig = get_latest_bitmex_data(symbol='XBTUSD', hours=900, dt=15, plot=True)
-    fig.savefig(local_plot_path / 'demo1_basic.png', dpi=300, bbox_inches='tight')
+    # df_price_data, fig = get_latest_bitmex_data(symbol='XBTUSD', hours=900, dt=15, plot=False)
+    # fig.savefig(local_plot_path / 'situation.png', dpi=300, bbox_inches='tight')
 
     seed = 42
     # dtype = "swt"
@@ -497,8 +507,7 @@ def main_opt_prediction():
 
     pd_opt_forecast_cfg = pd.concat([dict_cfg[dtype][15], dict_cfg[dtype][60]], axis=1).T
 
-    opt_forecst = DualOptForecast(input_data=df_price_data,
-                                  opt_dsvars=pd_opt_forecast_cfg,
+    opt_forecst = DualOptForecast(opt_dsvars=pd_opt_forecast_cfg,
                                   inc_len=50,
                                   plt_len=120,
                                   seed=seed,
@@ -511,15 +520,17 @@ def main_opt_prediction():
     for i in range(20):
         opt_forecst.prediction()
 
-        if i < 19:
+        if i < 99:
             for remaining in tqdm(
-                    range(1800, 0, -1),
+                    # range(1800, 0, -1),       # 30 minutes
+                    range(900, 0, -1),       # 15 minutes
                     desc="⏳ Next prediction in",
                     unit="s",
                     colour="green",
                     bar_format="{l_bar}{bar}| {remaining}s left"
             ):
                 time.sleep(1)
+            opt_forecst.update_input_data()
 
 
 if __name__ == "__main__":
