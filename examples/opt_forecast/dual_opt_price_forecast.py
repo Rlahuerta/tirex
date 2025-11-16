@@ -80,13 +80,16 @@ class DualOptForecast:
         self.dtype = dtype
         self.ftype = ftype
 
-        self._ft15_len = 1651
-        self._ft15_win = 44
-        self._ft60_len = 963
-        self._ft60_win = 44
+        self._ft15_len = 385
+        self._ft15_win = 2
+        self._ft15_penal = 3
 
-        self.convolve_ft15 = ConvolutionFilter(adim=self._ft15_len, window=self._ft15_win, ftype=self.ftype)
-        self.convolve_ft60 = ConvolutionFilter(adim=self._ft60_len, window=self._ft60_win, ftype=self.ftype)
+        self._ft60_len = 168
+        self._ft60_win = 11
+        self._ft60_penal = 1
+
+        self.convolve_ft15 = ConvolutionFilter(adim=self._ft15_len, window=self._ft15_win, penal=self._ft15_penal, ftype=self.ftype)
+        self.convolve_ft60 = ConvolutionFilter(adim=self._ft60_len, window=self._ft60_win, penal=self._ft60_penal, ftype=self.ftype)
 
         config = {"processes": 1, "spline_kind": 'akima', "DTYPE": float}
         self.emd = ICEEMDAN(trials=20, max_imf=-1, **config)
@@ -558,10 +561,10 @@ def main_opt_trade():
         df_price_data = pd.DataFrame()
 
     seed = 42
-    
+
     dtype = "ewt"
     # dtype = "swt"
-    dtype = "xwt"
+    # dtype = "xwt"
     # dtype = "emd"
     # dtype = "ssa"
 
@@ -582,8 +585,12 @@ def main_opt_trade():
             # 15: pd.Series(dict(window=861, decomplen=3361, bclen=0, nsignal=18, outlen=12, dtype="ewt"), name=15),
             # 15: pd.Series(dict(window=446, decomplen=1317, bclen=0, nsignal=12, outlen=12, dtype="ewt"), name=15),
             # 15: pd.Series(dict(window=124, decomplen=707, bclen=0, nsignal=13, outlen=12, dtype="ewt"), name=15),
-            15: pd.Series(dict(window=116, decomplen=1281, bclen=0, nsignal=17, outlen=12, dtype="ewt"), name=15),
-            60: pd.Series(dict(window=106, decomplen=831, bclen=2, nsignal=16, outlen=8, dtype="ewt"), name=60),
+            # 15: pd.Series(dict(window=116, decomplen=1281, bclen=0, nsignal=17, outlen=12, dtype="ewt"), name=15),
+            # 15: pd.Series(dict(window=764, decomplen=3145, bclen=8, nsignal=10, outlen=12, dtype="ewt"), name=15),    # corr
+            15: pd.Series(dict(window=1648, decomplen=2011, bclen=8, nsignal=12, outlen=12, dtype="ewt"), name=15),    # corr2
+            # 60: pd.Series(dict(window=106, decomplen=831, bclen=2, nsignal=16, outlen=8, dtype="ewt"), name=60),
+            # 60: pd.Series(dict(window=1152, decomplen=1465, bclen=7, nsignal=5, outlen=8, dtype="ewt"), name=60),    # corr
+            60: pd.Series(dict(window=504, decomplen=1490, bclen=0, nsignal=4, outlen=8, dtype="ewt"), name=60),    # corr2
         },
         ssa={
             15: pd.Series(dict(window=1794, decomplen=2228, bclen=9, nsignal=17, outlen=12, dtype="ssa"), name=15),
@@ -599,7 +606,7 @@ def main_opt_trade():
                                       plt_len=120,
                                       seed=seed,
                                       dtype=dtype,
-                                      ftype="",
+                                      ftype="backward",
                                       plot_flag=True,
                                       run_size=run_size,
                                       )

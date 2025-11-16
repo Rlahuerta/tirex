@@ -491,42 +491,46 @@ class OptSignalFilterForecast:
         # eqv_loss = out_res["lsq"].sum()
         # eqv_loss = -np.sum(out_res['correlation'])
 
-        normalized_lsq = out_res["lsq"].sum() / self.run_size
-        low_corr_penalty = np.sum(out_res['correlation'] < 0.5).item() / self.run_size
-        high_pvalue_penalty = np.sum(out_res['pvalue'] > 0.05).item() / self.run_size
-
         # Combined cost function (weighted sum)
         # Weights can be tuned based on your priorities
-        w_corr = 10.0           # Weight for correlation term
-        w_lsq = 1.0             # Weight for LSQ term
+        w_corr = 20.0           # Weight for correlation term
+        w_lsq = 5.0             # Weight for LSQ term
         w_low_corr = 5.0        # Weight for low correlation penalty
         w_pvalue = 2.0          # Weight for p-value penalty
 
-        eqv_loss = (
-                - w_corr * overall_correlation           # Maximize correlation
-                + w_lsq * normalized_lsq                 # Minimize LSQ
-                + w_low_corr * low_corr_penalty          # Penalize low correlations
-                + w_pvalue * high_pvalue_penalty         # Penalize non-significant results
-            )
+        np_wg = np.array([-w_corr, w_lsq, w_low_corr, w_pvalue])
+        cost_fval = out_res["lsq"].sum().item() / (self.out_len * self.run_size)
+
+        low_corr_penalty = np.sum(out_res['correlation'] < 0.5).item() / self.run_size
+        high_pvalue_penalty = np.sum(out_res['pvalue'] > 0.05).item() / self.run_size
+
+        eqv_loss = np.array([
+                overall_correlation,        # Maximize correlation
+                cost_fval,                  # Minimize cost function (LSQ)
+                low_corr_penalty,           # Penalize low correlations
+                high_pvalue_penalty,        # Penalize non-significant results
+            ])
+
+        eqv_loss_sum = np.dot(np_wg, eqv_loss)
 
         self.loss_info["iter"].append(self._iter)
         self.loss_info["length"].append(dsvars[0])
         self.loss_info["window"].append(dsvars[1])
         self.loss_info["penal"].append(dsvars[2])
 
-        self.loss_info["cost"].append(eqv_loss.item())
+        self.loss_info["cost"].append(eqv_loss_sum)
         self.loss_info["correlation"].append(overall_correlation)
         self.loss_info["correlation_sum"].append(np.sum(out_res['correlation']).item())
-        self.loss_info["correlation_median"].append(np.median(out_res['correlation']).item())
+        self.loss_info["correlation_median"].append(overall_correlation)
         self.loss_info["pvalue"].append(np.mean(out_res['pvalue']))
 
-        print(f" >>> Iter.: {self._iter}, Processing DSVARS: {dsvars}, LSQ Value: {eqv_loss}, "
+        print(f" >>> Iter.: {self._iter}, Processing DSVARS: {dsvars}, LSQ Value: {eqv_loss_sum}, "
               f"Avg. Correlation {overall_correlation}, Mean P-value: {np.mean(out_res['pvalue'])}")
 
         self._write_csv()
         self._iter += 1
 
-        return eqv_loss
+        return eqv_loss_sum
 
 
 def get_design_ft_param_sample(seed: int = 42) -> np.ndarray:

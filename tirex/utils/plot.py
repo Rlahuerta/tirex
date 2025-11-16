@@ -368,6 +368,10 @@ def save_plot(x: np.ndarray, y_original: np.ndarray, y_filtered: np.ndarray, tit
 
 def _add_candlestick(ax, tickers: pd.DataFrame, dt: int = None):
 
+    # Convert all column names to lowercase
+    tickers.copy()
+    tickers.columns = tickers.columns.str.lower()
+
     if dt is None or dt == 60:
         width, width2 = 0.04, 0.01
 
@@ -507,7 +511,11 @@ def dual_plot_mpl_ticker(input_tickers: pd.DataFrame,
     fig, ax = plt.subplots(figsize=(24, 8))
     fig.suptitle('Asset Price and Overlays', fontsize=12)
 
-    time_increment = int(input_tickers.index.to_series().diff().mean().total_seconds() / 60)
+    time_increment = int((input_tickers.index[-1] - input_tickers.index[-2]).total_seconds() / 60)
+
+    # Convert all column names to lowercase
+    input_tickers.copy()
+    input_tickers.columns = input_tickers.columns.str.lower()
 
     # Plotting candlesticks
     _add_candlestick(ax, input_tickers, dt=time_increment)
@@ -521,6 +529,10 @@ def dual_plot_mpl_ticker(input_tickers: pd.DataFrame,
 
     # Prediction and other overlays
     if isinstance(forward_tickers, pd.DataFrame):
+        # Convert all column names to lowercase
+        forward_tickers.copy()
+        forward_tickers.columns = forward_tickers.columns.str.lower()
+
         _add_candlestick(ax, forward_tickers[['open', 'close', 'high', 'low']], dt=time_increment)
 
     # Prediction and other overlays

@@ -347,16 +347,19 @@ class BitMEX:
             dt_i = 5
 
         elif dt == 3:
+            # 15 minutes ticker
             # str_dt = '15m'
             str_dt = '5m'
             dt_i = 5
 
         elif dt == 6:
+            # 30 minutes ticker
             # str_dt = '15m'
             str_dt = '5m'
             dt_i = 5
 
         elif dt == 12:
+            # 60 minutes ticker
             str_dt = '1h'
             dt_i = 60
 
@@ -636,11 +639,13 @@ def save_ticker(dt: int = 60, size: int = 80000):
 
     end_date = pd.Timestamp(year=pd_time.year, month=pd_time.month, day=pd_time.day, hour=pd_time.hour, minute=dt_inc * dt)
 
-    nhours = 80000
+    nhours = 1000
+    # nhours = 80000
     # nhours = 20000
     fn_name = f"btcusd_{dt}m_{end_date.strftime('%Y-%m-%d')}"
 
-    pd_chart = get_data_pair('XBTUSD', nhours, dt // 5, fn_time=end_date)
+    # pd_chart = get_data_pair('XBTUSD', nhours, dt // 5, fn_time=end_date)
+    pd_chart = get_data_pair('XBTUSD', nhours, dt // 5)
     pd_chart = pd_chart[-size:]
     pd_chart.to_parquet(f"{parquete_path}/{fn_name}.parquet")
 

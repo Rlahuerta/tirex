@@ -492,20 +492,22 @@ class OptSignalDecompForecast:
 
         # Combined cost function (weighted sum)
         # Weights can be tuned based on your priorities
-        w_corr = 10.0           # Weight for correlation term
+        w_corr = 20.0           # Weight for correlation term
         w_lsq = 5.0             # Weight for LSQ term
         w_low_corr = 5.0        # Weight for low correlation penalty
         w_pvalue = 2.0          # Weight for p-value penalty
+
         np_wg = np.array([-w_corr, w_lsq, w_low_corr, w_pvalue])
+        cost_fval = out_res["lsq"].sum().item() / (self.out_len * self.run_size)
 
         low_corr_penalty = np.sum(out_res['correlation'] < 0.5).item() / self.run_size
         high_pvalue_penalty = np.sum(out_res['pvalue'] > 0.05).item() / self.run_size
 
         eqv_loss = np.array([
-                np.median(out_res['correlation']).item(),               # Maximize correlation
-                out_res["lsq"].sum().item() / self.run_size,            # Minimize cost function (LSQ)
-                low_corr_penalty,                                       # Penalize low correlations
-                high_pvalue_penalty,                                    # Penalize non-significant results
+                overall_correlation,        # Maximize correlation
+                cost_fval,                  # Minimize cost function (LSQ)
+                low_corr_penalty,           # Penalize low correlations
+                high_pvalue_penalty,        # Penalize non-significant results
             ])
 
         eqv_loss_sum = np.dot(np_wg, eqv_loss)
@@ -765,28 +767,32 @@ def main_opt_forecast(opt: bool = True):
     dict_price_data = load(input_data_path)
     seed = 100
 
-    # dt = 15
-    dt = 60
+    dt = 15
+    # dt = 60
 
-    dtype = "ewt"
+    # dtype = "ewt"
     # dtype = "xwt"
     # dtype = "swt"
     # dtype = "emd"
-    # dtype = "ssa"
+    dtype = "ssa"
 
-    # run_size = 30
+    run_size = 30
     # run_size = 100
     # run_size = 200
     # run_size = 300
-    run_size = 500
+    # run_size = 500
 
     if dt == 15:
         out_len = 12
-        np_dsvars = np.asarray([1416, 4523, 3, 8])
+
+        # window; decomplen; bclen; nsignal
+        np_dsvars = np.asarray([1648, 2011, 8, 12])
         bounds = [(100, 2000), (500, 5000), (0, 10), (6, 20)]  # dt15
 
     elif dt == 60:
         out_len = 8
+
+        # window; decomplen; bclen; nsignal
         np_dsvars = np.asarray([307, 1118, 1, 3])
         bounds = [(100, 1500), (100, 1500), (0, 10), (3, 20)]  # dt60
 
@@ -804,8 +810,9 @@ def main_opt_forecast(opt: bool = True):
                                               run_size=run_size,
                                               )
 
+    res_out = opt_decomp_forecst.objective_scipy(np_dsvars)
+
     if opt:
-        res_out = opt_decomp_forecst.objective_scipy(np_dsvars)
         integrality = [True, True, True, True]
 
         # Define the linear constraint: x2 - x1 >= 100
@@ -911,7 +918,7 @@ def main_opt_trade():
 if __name__ == "__main__":
     # main_search_forecast()
 
-    # main_opt_forecast(opt=True)
-    main_opt_forecast(opt=False)
+    main_opt_forecast(opt=True)
+    # main_opt_forecast(opt=False)
 
     # main_opt_trade()

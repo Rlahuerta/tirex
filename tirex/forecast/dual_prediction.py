@@ -16,11 +16,9 @@ from tirex.utils.ssa import ssa
 from tirex.utils.filters import ConvolutionFilter, quadratic_fit_series
 from tirex.utils.time import create_time_index
 from tirex.utils.plot import plot_fc, dual_plot_mpl_ticker
-from tirex.utils.bitmex_latest import get_latest_bitmex_data, fetch_and_plot_latest_btc
+from tirex.utils.binance import fetch_bitcoin_data
 from tirex.utils.rescale import apply_minmax_inverse_scaler
 
-
-# FIXME
 # Add the project root to the Python path
 project_local_path = Path(__file__).resolve().parent.parent.parent
 local_plot_path = (project_local_path / "predictions").resolve()
@@ -62,9 +60,10 @@ class DualOptForecast:
         # Get the number of hours
         hdt15 = opt_dsvars.loc[15, "decomplen"] // 4
         hdt60 = opt_dsvars.loc[60, "decomplen"]
-        nhours = int(1.1 * max(hdt15, hdt60))
+        nhours = int(2.5 * max(hdt15, hdt60))
 
-        df_price_data, fig = get_latest_bitmex_data(symbol='XBTUSD', hours=nhours, dt=15, plot=False)
+        df_price_data = fetch_bitcoin_data(hours=nhours, interval='15m')
+
         self.input_data = df_price_data
 
         # Forecast Variables
@@ -82,13 +81,18 @@ class DualOptForecast:
         self.dtype = dtype
         self.ftype = ftype
 
-        self._ft15_len = 1651
-        self._ft15_win = 44
-        self._ft60_len = 963
-        self._ft60_win = 44
+        self._ft15_len = 385
+        self._ft15_win = 2
+        self._ft15_penal = 3
 
-        self.convolve_ft15 = ConvolutionFilter(adim=self._ft15_len, window=self._ft15_win, ftype=self.ftype)
-        self.convolve_ft60 = ConvolutionFilter(adim=self._ft60_len, window=self._ft60_win, ftype=self.ftype)
+        self._ft60_len = 168
+        self._ft60_win = 11
+        self._ft60_penal = 1
+
+        self.convolve_ft15 = ConvolutionFilter(adim=self._ft15_len, window=self._ft15_win, penal=self._ft15_penal,
+                                               ftype=self.ftype)
+        self.convolve_ft60 = ConvolutionFilter(adim=self._ft60_len, window=self._ft60_win, penal=self._ft60_penal,
+                                               ftype=self.ftype)
 
         config = {"processes": 1, "spline_kind": 'akima', "DTYPE": float}
         self.emd = ICEEMDAN(trials=20, max_imf=-1, **config)
@@ -101,7 +105,7 @@ class DualOptForecast:
         self._model_path = (Path(__file__).parent.parent.parent / "model" / "model.ckpt").resolve()
         self._forecast = None
 
-        self.df_data = self.input_data["close"]
+        self.df_data = self.input_data["Close"]
         self.scaler_data = MinMaxScaler(feature_range=(0., 100.))
 
         self.np_data_idx = np.arange(len(self.df_data))
@@ -146,7 +150,7 @@ class DualOptForecast:
         Update the input data and re-preprocess.
         """
 
-        new_data, _ = get_latest_bitmex_data(symbol='XBTUSD', hours=1, dt=15, plot=False)
+        new_data = fetch_bitcoin_data(hours=3, interval='15m')
 
         # Concatenate and remove duplicates by index
         combined_data = pd.concat([self.input_data, new_data])
@@ -154,7 +158,7 @@ class DualOptForecast:
         combined_data = combined_data.sort_index()
 
         self.input_data = combined_data
-        self.df_data = self.input_data["close"]
+        self.df_data = self.input_data["Close"]
 
         np_data_rs = self.scaler_data.transform(self.df_data.values.reshape(-1, 1)).flatten()
         self.sr_data_rs = pd.Series(np_data_rs, index=self.input_data.index)
@@ -420,7 +424,7 @@ class DualOptForecast:
         dt15_bclen = self.opt_dsvars.loc[15, "bclen"]
         dt60_bclen = self.opt_dsvars.loc[60, "bclen"]
 
-        ticker_keys = ['open', 'close', 'high', 'low']
+        ticker_keys = ['Open', 'Close', 'High', 'Low']
 
         signal15_len = self.opt_dsvars.loc[15, ["decomplen", "bclen"]].sum()
         signal60_len = 4 * self.opt_dsvars.loc[60, ["decomplen", "bclen"]].sum()
@@ -437,7 +441,7 @@ class DualOptForecast:
         # Decompose and process the signals, where Y =: F(X)
         dict_signal_process_i = self._processing_signals(dtm_x)
 
-        # Get Support Points (FIXME)
+        # Get Support/ and Resistances Points (FIXME)
         # sr_support_points_i = self._get_support_points(dtm_x[15])
 
         # Config for plotting
@@ -496,8 +500,9 @@ def main_opt_prediction():
             # 15: pd.Series(dict(window=861, decomplen=3361, bclen=0, nsignal=18, outlen=12, dtype="ewt"), name=15),
             # 15: pd.Series(dict(window=446, decomplen=1317, bclen=0, nsignal=12, outlen=12, dtype="ewt"), name=15),
             # 15: pd.Series(dict(window=124, decomplen=707, bclen=0, nsignal=13, outlen=12, dtype="ewt"), name=15),
-            15: pd.Series(dict(window=116, decomplen=1281, bclen=0, nsignal=17, outlen=12, dtype="ewt"), name=15),
-            60: pd.Series(dict(window=106, decomplen=831, bclen=2, nsignal=16, outlen=8, dtype="ewt"), name=60),
+            # 15: pd.Series(dict(window=116, decomplen=1281, bclen=0, nsignal=17, outlen=12, dtype="ewt"), name=15),
+            15: pd.Series(dict(window=1648, decomplen=2011, bclen=8, nsignal=12, outlen=12, dtype="ewt"), name=15),         # corr
+            60: pd.Series(dict(window=504, decomplen=1490, bclen=0, nsignal=4, outlen=12, dtype="ewt"), name=60),           # corr
         },
         ssa={
             15: pd.Series(dict(window=1794, decomplen=2228, bclen=9, nsignal=17, outlen=12, dtype="ssa"), name=15),
