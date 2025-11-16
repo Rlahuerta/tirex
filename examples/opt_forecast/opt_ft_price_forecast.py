@@ -5,9 +5,11 @@ import datetime
 # import warnings
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 from tqdm import tqdm
 from joblib import load
+from scipy.stats import pearsonr, chi2
 from scipy.optimize import differential_evolution, LinearConstraint
 from sklearn.preprocessing import MinMaxScaler
 from typing import Tuple, List, Dict, Any, Optional, Union, Callable
@@ -18,9 +20,176 @@ from tirex.utils.time import create_time_index
 from tirex.utils.path import cleanup_directory
 from tirex.utils.plot import plot_fc, plot_mpl_ticker
 from tirex.utils.rescale import apply_minmax_inverse_scaler
+from tirex.utils.cost_function import cauchy_fval
 
 # Add the project root to the Python path
 project_local_path = Path(__file__).resolve().parent
+
+
+def fishers_z_transform(r: float) -> float:
+    """Convert correlation coefficient to Fisher's z."""
+    return 0.5 * np.log((1 + r) / (1 - r))
+
+
+def inverse_fishers_z(z: float) -> float:
+    """Convert Fisher's z back to correlation coefficient."""
+    return (np.exp(2 * z) - 1) / (np.exp(2 * z) + 1)
+
+
+def fishers_combined_pvalue(p_values: List[float]) -> float:
+    """
+    Combine multiple p-values using Fisher's method.
+
+    Args:
+        p_values: List of p-values to combine
+
+    Returns:
+        Combined p-value
+    """
+    # Fisher's test statistic: -2 * sum(log(p_i))
+    test_statistic = -2 * np.sum(np.log(p_values))
+
+    # Degrees of freedom: 2 * number of tests
+    df = 2 * len(p_values)
+
+    # Combined p-value from chi-squared distribution
+    combined_pvalue = 1 - chi2.cdf(test_statistic, df)
+
+    return combined_pvalue
+
+
+def aggregate_correlations(correlations: List[float], sample_size: int) -> float:
+    """
+    Aggregate multiple correlation coefficients using Fisher's Z-transformation.
+
+    Args:
+        correlations: List of correlation coefficients
+        sample_size: sample sizes for each correlation
+
+    Returns:
+        Aggregated correlation coefficient
+    """
+    # Convert correlations to Fisher's z
+    z_values = np.array([fishers_z_transform(r) for r in correlations])
+
+    # Weight by (n - 3) where n is sample size
+    weights = np.array(sample_size) - 3
+
+    # Calculate weighted mean of z values
+    z_mean = np.sum(z_values * weights) / np.sum(weights)
+
+    # Convert back to correlation
+    return inverse_fishers_z(z_mean)
+
+
+def flip_timeseries(sr_prediction: pd.Series, pivot_point: Optional[float] = None) -> pd.Series:
+    """
+    Mirror/flip time series prediction along y-axis.
+
+    Args:
+        sr_prediction: Time series to flip
+        pivot_point: Point to flip around. If None, uses series mean.
+
+    Returns:
+        Flipped time series
+    """
+    if pivot_point is None:
+        pivot_point = sr_prediction.mean()
+
+    return 2 * pivot_point - sr_prediction
+
+
+def plot_flipped_comparison(
+        sr_original: pd.Series,
+        sr_reference: Optional[pd.Series] = None,
+        pivot_point: Optional[float] = None,
+        title: str = "Time Series Flip Comparison",
+        save_path: Optional[str] = None,
+        figsize: tuple = (14, 6),
+        dpi: int = 100
+) -> None:
+    """
+    Plot original and flipped time series side by side for comparison.
+
+    Args:
+        sr_original: Original time series
+        sr_reference: Reference time series to compare against (optional)
+        pivot_point: Point to flip around. If None, uses original series mean
+        title: Plot title
+        save_path: Path to save the figure (optional)
+        figsize: Figure size (width, height)
+        dpi: Resolution for saved figure
+    """
+    # Create flipped series
+    sr_flipped = flip_timeseries(sr_original, pivot_point)
+
+    # Determine pivot point for plotting
+    if pivot_point is None:
+        pivot_point = sr_original.mean()
+
+    # Create figure with subplots
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+
+    # Left plot: Original vs Flipped
+    axes[0].plot(sr_original.index, sr_original.values,
+                 label='Original', color='blue', linewidth=1.5, alpha=0.8)
+    axes[0].plot(sr_flipped.index, sr_flipped.values,
+                 label='Flipped', color='red', linewidth=1.5, alpha=0.8, linestyle='--')
+    axes[0].axhline(y=pivot_point, color='green', linestyle=':',
+                    linewidth=1.5, label=f'Pivot ({pivot_point:.2f})')
+
+    axes[0].set_xlabel('Time')
+    axes[0].set_ylabel('Value')
+    axes[0].set_title('Original vs Flipped')
+    axes[0].legend(loc='best')
+    axes[0].grid(True, alpha=0.3)
+
+    # Right plot: Compare with reference if provided
+    if sr_reference is not None:
+        axes[1].plot(sr_reference.index, sr_reference.values,
+                     label='Reference', color='black', linewidth=2, alpha=0.7)
+        axes[1].plot(sr_original.index, sr_original.values,
+                     label='Original Prediction', color='blue',
+                     linewidth=1.5, alpha=0.6, linestyle='-')
+        axes[1].plot(sr_flipped.index, sr_flipped.values,
+                     label='Flipped Prediction', color='red',
+                     linewidth=1.5, alpha=0.6, linestyle='--')
+
+        # Calculate correlations
+        corr_orig, _ = pearsonr(sr_original.values, sr_reference.values)
+        corr_flip, _ = pearsonr(sr_flipped.values, sr_reference.values)
+
+        axes[1].set_title(f'Reference Comparison\n'
+                          f'Corr Original: {corr_orig:.3f} | Corr Flipped: {corr_flip:.3f}')
+        axes[1].set_xlabel('Time')
+        axes[1].set_ylabel('Value')
+        axes[1].legend(loc='best')
+        axes[1].grid(True, alpha=0.3)
+    else:
+        # If no reference, show both series separately
+        axes[1].plot(sr_original.index, sr_original.values,
+                     label='Original', color='blue', linewidth=1.5)
+        axes[1].set_xlabel('Time')
+        axes[1].set_ylabel('Value')
+        axes[1].set_title('Original Time Series')
+        axes[1].legend(loc='best')
+        axes[1].grid(True, alpha=0.3)
+
+        # Add text with statistics
+        stats_text = f"Original:\n  Mean: {sr_original.mean():.2f}\n  Std: {sr_original.std():.2f}\n"
+        stats_text += f"\nFlipped:\n  Mean: {sr_flipped.mean():.2f}\n  Std: {sr_flipped.std():.2f}"
+        axes[1].text(0.02, 0.98, stats_text, transform=axes[1].transAxes,
+                     verticalalignment='top', bbox=dict(boxstyle='round',
+                                                        facecolor='wheat', alpha=0.5), fontsize=9)
+
+    plt.suptitle(title, fontsize=14, fontweight='bold')
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+        print(f"Plot saved to: {save_path}")
+
+    plt.show()
 
 
 class OptSignalFilterForecast:
@@ -77,8 +246,12 @@ class OptSignalFilterForecast:
         self.csv_file_info = (
                     project_local_path / f"opt_ft_dt_{num_dt}_forlen_{out_len}_rsize_{run_size}_{timestamp_str}.csv")
 
-        self.loss_info = {"iter": [], "length": [], "window": [], "penal": [], "cost": [], "efficiency": [],
-                          "performance": [], }
+        self.loss_info = {"iter": [], "length": [], "window": [], "penal": [],
+                          "cost": [],
+                          "correlation": [],
+                          "correlation_sum": [],
+                          "correlation_median": [],
+                          "pvalue": [], }
 
         # Forecast Model and function
         self._model = None
@@ -208,7 +381,6 @@ class OptSignalFilterForecast:
         """
 
         # Optimization Variables
-
         length = int(dsvars["length"])
         window = int(dsvars["window"])
         penal = float(dsvars["penal"])
@@ -226,7 +398,8 @@ class OptSignalFilterForecast:
         list_y_prd = []
         list_dy_ref = []
         list_dy_prd = []
-        list_eff_pred = []
+        list_corr_index = []
+        list_corr_pvalue = []
         ticker_keys = ['open', 'close', 'high', 'low']
 
         ft_idx = np.arange(0, length, dtype=int)
@@ -251,24 +424,23 @@ class OptSignalFilterForecast:
 
             # Reference
             sr_y_i = self.sr_data_rs[pd_ft_forecast_i.index]
-            dy_i = (sr_y_i.values[-1] - sr_ft_x_i.values[-1]) / (sr_y_i.size + 1)
-            list_dy_ref.append(dy_i)
+            list_y_ref.append(sr_y_i)
 
             # Prediction
             sr_y_prd_i = pd_ft_forecast_i["mean"]
-            dy_prd_i = (sr_y_prd_i.values[-1] - sr_y_prd_i.values[0]) / sr_y_prd_i.size
-            list_dy_prd.append(dy_prd_i)
+            list_y_prd.append(sr_y_prd_i)
 
-            y_eff_prd_i = dy_prd_i / (dy_i + 1.e-9)
+            # Verification Efficiency
+            corr_coef_i, p_value_i = pearsonr(sr_y_prd_i.values, sr_y_i.values)
+            list_corr_index.append(corr_coef_i.item())
+            list_corr_pvalue.append(p_value_i.item())
 
             # Calculate LSQ cost function
-            list_eff_pred.append(y_eff_prd_i)
-            np_diff_i = (sr_y_i.values - sr_y_i.values[0]) - (sr_y_prd_i.values - sr_y_prd_i.values[0])
-            list_lsq.append(np.dot(np_diff_i, np_diff_i))
+            np_y_res_i = sr_y_i.values - sr_y_prd_i.values
+            # list_lsq.append(np.dot(np_y_res_i, np_y_res_i))
+            list_lsq.append(cauchy_fval(np_y_res_i, c=20.))
 
             if self.plot_flag:
-                list_y_ref.append(sr_y_i)
-                list_y_prd.append(sr_y_prd_i)
                 out_idx_i = ft_idx_i[-1] + np.arange(1, 31)
 
                 # For verification only
@@ -282,18 +454,12 @@ class OptSignalFilterForecast:
                                 )
 
         np_lsq = np.asarray(list_lsq)
-        np_eff_pred = np.asarray(list_eff_pred)
-
-        np_dy_prd_idx = np.abs(np.asarray(list_dy_prd)) > 0.002
-        np_eff_pred_cl = np_eff_pred[np_dy_prd_idx]
-        neff_cl = (np_eff_pred_cl > 0.).sum() / np_eff_pred_cl.size
 
         return {"lsq": np_lsq,
-                "efficiency": (np_eff_pred > 0.1).sum().item() / np_eff_pred.size,
-                "performance": neff_cl.item(),
+                "correlation": np.array(list_corr_index),
+                "pvalue": np.array(list_corr_pvalue),
                 "dy_ref": np.asarray(list_dy_ref),
                 "dy_prd": np.asarray(list_dy_prd),
-                "reference": list_dy_ref,
                 "forecast": list_y_prd,
                 }
 
@@ -318,7 +484,30 @@ class OptSignalFilterForecast:
         # Optimization Variables
         out_res = self.objective(pd.Series({'length': dsvars[0], 'window': dsvars[1], 'penal': dsvars[2]}))
 
-        eqv_loss = out_res["lsq"].sum() / 10. - out_res["performance"]
+        # Aggregate correlations using Fisher's Z-transformation
+        # overall_correlation = aggregate_correlations(out_res['correlation'], self.out_len)
+        overall_correlation = np.median(out_res['correlation']).item()
+
+        # eqv_loss = out_res["lsq"].sum()
+        # eqv_loss = -np.sum(out_res['correlation'])
+
+        normalized_lsq = out_res["lsq"].sum() / self.run_size
+        low_corr_penalty = np.sum(out_res['correlation'] < 0.5).item() / self.run_size
+        high_pvalue_penalty = np.sum(out_res['pvalue'] > 0.05).item() / self.run_size
+
+        # Combined cost function (weighted sum)
+        # Weights can be tuned based on your priorities
+        w_corr = 10.0           # Weight for correlation term
+        w_lsq = 1.0             # Weight for LSQ term
+        w_low_corr = 5.0        # Weight for low correlation penalty
+        w_pvalue = 2.0          # Weight for p-value penalty
+
+        eqv_loss = (
+                - w_corr * overall_correlation           # Maximize correlation
+                + w_lsq * normalized_lsq                 # Minimize LSQ
+                + w_low_corr * low_corr_penalty          # Penalize low correlations
+                + w_pvalue * high_pvalue_penalty         # Penalize non-significant results
+            )
 
         self.loss_info["iter"].append(self._iter)
         self.loss_info["length"].append(dsvars[0])
@@ -326,10 +515,13 @@ class OptSignalFilterForecast:
         self.loss_info["penal"].append(dsvars[2])
 
         self.loss_info["cost"].append(eqv_loss.item())
-        self.loss_info["efficiency"].append(out_res["efficiency"])
-        self.loss_info["performance"].append(out_res["performance"])
+        self.loss_info["correlation"].append(overall_correlation)
+        self.loss_info["correlation_sum"].append(np.sum(out_res['correlation']).item())
+        self.loss_info["correlation_median"].append(np.median(out_res['correlation']).item())
+        self.loss_info["pvalue"].append(np.mean(out_res['pvalue']))
 
-        print(f" >>> Iter.: {self._iter}, Processing DSVARS: {dsvars}, LSQ Value: {eqv_loss}, Efficiency {out_res['efficiency']}, Performance: {out_res['performance']}")
+        print(f" >>> Iter.: {self._iter}, Processing DSVARS: {dsvars}, LSQ Value: {eqv_loss}, "
+              f"Avg. Correlation {overall_correlation}, Mean P-value: {np.mean(out_res['pvalue'])}")
 
         self._write_csv()
         self._iter += 1
@@ -368,12 +560,27 @@ def get_design_ft_param_sample(seed: int = 42) -> np.ndarray:
 
 def main_opt_forecast(opt: bool = True):
 
-    input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
-    dict_price_data = load(input_data_path)
-    seed = 100
-
+    # dt = 5
     dt = 15
     # dt = 60
+
+    seed = 100
+
+    if dt in [15, 60]:
+        fn_data = "btcusd_2022-06-01.joblib"
+        input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / fn_data).resolve()
+        dict_price_data = load(input_data_path)
+        pd_price_data = dict_price_data[dt]
+
+    elif dt == 5:
+        fn_data = "btcusd_5m_2025-11-12.parquet"
+        current_file_path = Path(__file__).parent.parent.parent
+        parquete_path = current_file_path / "Signals/data"
+        input_data_path = (parquete_path / fn_data).resolve()
+        pd_price_data = pd.read_parquet(input_data_path)
+
+    else:
+        raise NotImplementedError
 
     # run_size = 30
     # run_size = 100
@@ -381,30 +588,44 @@ def main_opt_forecast(opt: bool = True):
     # run_size = 300
     run_size = 500
 
-    if dt == 15:
+    if dt == 5:
+        out_len = 21
+
+        # sr_dsvars = pd.Series({'length': 1651, 'window': 44, 'penal': 1.})    # backward (correlation)
+        sr_dsvars = pd.Series({'length': 1889, 'window': 2, 'penal': 2.})  # backward (correlation)
+        bounds = [(100, 2000), (2, 50), (1, 3)]
+
+    elif dt == 15:
         out_len = 12
+
         # len, win, penal
-        sr_dsvars = pd.Series({'length': 1651, 'window': 44, 'penal': 1.})     # backward
-        sr_dsvars = pd.Series({'length': 723, 'window': 27, 'penal': 1.})     # full
+        # sr_dsvars = pd.Series({'length': 1651, 'window': 44, 'penal': 1.})        # backward
+        # sr_dsvars = pd.Series({'length': 322, 'window': 12, 'penal': 1.})         # backward (correlation)
+        sr_dsvars = pd.Series({'length': 385, 'window': 2, 'penal': 3.})            # backward (correlation)
+        # sr_dsvars = pd.Series({'length': 723, 'window': 27, 'penal': 1.})         # full
         bounds = [(100, 2000), (2, 50), (1, 3)]  # dt15
 
     elif dt == 60:
-        out_len = 8
+        # out_len = 8
+        out_len = 12
+
         # len, win, penal
-        # sr_dsvars = pd.Series({'length': 100, 'window': 8, 'penal': 1.})     # random sample
-        sr_dsvars = pd.Series({'length': 963, 'window': 44, 'penal': 1.})     # backward
+        # sr_dsvars = pd.Series({'length': 100, 'window': 8, 'penal': 1.}       # random sample
+        # sr_dsvars = pd.Series({'length': 963, 'window': 44, 'penal': 1.})       # backward
+        sr_dsvars = pd.Series({'length': 168, 'window': 11, 'penal': 1.})       # backward (correlation)
+        # sr_dsvars = pd.Series({'length': 648, 'window': 2, 'penal': 1.})        # backward (correlation)
         # sr_dsvars = pd.Series({'length': 156, 'window': 22, 'penal': 1.})     # full
-        bounds = [(100, 1500), (2, 50), (1, 3)]  # dt60
+        bounds = [(100, 1500), (2, 50), (1, 3)]
 
     else:
         raise NotImplementedError
 
-    opt_ft_forecst = OptSignalFilterForecast(input_data=dict_price_data[dt],
+    opt_ft_forecst = OptSignalFilterForecast(input_data=pd_price_data,
                                              out_len=out_len,
                                              inc_len=50,
                                              plt_len=120,
                                              seed=seed,
-                                             ftype="full",
+                                             ftype="backward",
                                              plot_flag=not opt,
                                              run_size=run_size,
                                              )
@@ -443,5 +664,5 @@ def main_opt_forecast(opt: bool = True):
 
 
 if __name__ == "__main__":
-    main_opt_forecast(opt=False)
-    # main_opt_forecast(opt=True)
+    # main_opt_forecast(opt=False)
+    main_opt_forecast(opt=True)

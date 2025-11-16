@@ -558,9 +558,11 @@ def main_opt_trade():
         df_price_data = pd.DataFrame()
 
     seed = 42
-    # dtype = "swt"
-    # dtype = "emd"
+    
     dtype = "ewt"
+    # dtype = "swt"
+    dtype = "xwt"
+    # dtype = "emd"
     # dtype = "ssa"
 
     # run_size = 50

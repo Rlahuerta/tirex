@@ -7,6 +7,7 @@ import pandas as pd
 
 from tqdm import tqdm
 from joblib import load
+from scipy.stats import pearsonr, chi2
 from scipy.optimize import differential_evolution, direct, minimize, LinearConstraint
 from sklearn.preprocessing import MinMaxScaler
 from typing import Tuple, List, Dict, Any, Optional, Union, Callable
@@ -20,6 +21,7 @@ from tirex.utils.time import create_time_index
 from tirex.utils.path import cleanup_directory
 from tirex.utils.plot import plot_fc, plot_mpl_ticker
 from tirex.utils.trade import TrailingStopOrder
+from tirex.utils.cost_function import cauchy_fval
 
 # Add the project root to the Python path
 project_local_path = Path(__file__).resolve().parent
@@ -94,7 +96,11 @@ class OptSignalDecompForecast:
                     project_local_path / f"opt_ifo_{dtype}_dt_{num_dt}_forlen_{out_len}_rsize_{run_size}_{timestamp_str}.csv")
 
         self.loss_info = {"iter": [], "window": [], "decomplen": [], "bclen": [], "nsignal": [],
-                          "cost": [], "efficiency": [], "performance": [], }
+                          "cost": [],
+                          "correlation": [],
+                          "correlation_sum": [],
+                          "correlation_median": [],
+                          "pvalue": [], }
 
         # Forecast Model and function
         self._model = None
@@ -360,15 +366,15 @@ class OptSignalDecompForecast:
         """
 
         # Optimization Variables
-        window = dsvars["window"]
-        decomplen = dsvars["decomplen"]
-        bclen = dsvars["bclen"]
-        nsignal = dsvars["nsignal"]
+        window = int(dsvars["window"])
+        decomplen = int(dsvars["decomplen"])
+        bclen = int(dsvars["bclen"])
+        nsignal = int(dsvars["nsignal"])
 
         assert window > 50, f"window should be greater than 50, window is {window}"
         assert decomplen >= window, f"decomplen should be greater or equal than window, decomplen is {decomplen}"
         assert bclen >= 0, f"bclen should be greater or equal than 0, bclen is {bclen}"
-        assert nsignal > 3, f"nsignal should be greater than 3, nsignal is {nsignal}"
+        assert nsignal >= 3, f"nsignal should be greater than 3, nsignal is {nsignal}"
 
         local_obj_plot_path = (project_local_path / f"{self.dtype}_plots").resolve()
         local_obj_plot_path.mkdir(exist_ok=True)
@@ -381,7 +387,8 @@ class OptSignalDecompForecast:
         list_y_prd = []
         list_dy_ref = []
         list_dy_prd = []
-        list_eff_pred = []
+        list_corr_index = []
+        list_corr_pvalue = []
 
         for i, idx_i in enumerate(tqdm(self.np_idx_inc_eval[:self.run_size], desc="Processing")):
             decomp_idx_i = decomp_idx + (idx_i - decomplen)
@@ -407,20 +414,20 @@ class OptSignalDecompForecast:
 
             # Reference
             sr_y_i = self.sr_data_rs[pd_forecast_i.index[bclen:]]
-            dy_i = (sr_y_i.values[-1] - sr_x_ft_i.values[-1]) / (sr_y_i.size + 1)
-            list_dy_ref.append(dy_i)
+            list_y_ref.append(sr_y_i)
 
             # Prediction
             sr_y_prd_i = pd_forecast_i["mean"][bclen:]
-            dy_prd_i = (sr_y_prd_i.values[-1] - sr_y_prd_i.values[0]) / sr_y_prd_i.size
-            list_dy_prd.append(dy_prd_i)
+            list_y_prd.append(sr_y_prd_i)
 
-            y_eff_prd_i = dy_prd_i / (dy_i + 1.e-9)
+            # Verification Efficiency
+            corr_coef_i, p_value_i = pearsonr(sr_y_prd_i.values, sr_y_i.values)
+            list_corr_index.append(corr_coef_i.item())
+            list_corr_pvalue.append(p_value_i.item())
 
             # Calculate LSQ cost function
-            list_eff_pred.append(y_eff_prd_i)
-            np_diff_i = (sr_y_i.values - sr_y_i.values[0]) - (sr_y_prd_i.values - sr_y_prd_i.values[0])
-            list_lsq.append(np.dot(np_diff_i, np_diff_i))
+            np_res_i = sr_y_i.values - sr_y_prd_i.values
+            list_lsq.append(cauchy_fval(np_res_i, c=20.))
 
             if self.plot_flag:
                 list_y_ref.append(sr_y_i)
@@ -437,18 +444,12 @@ class OptSignalDecompForecast:
                         save_path=f'{local_plot_path_i}/signal_sum_pred.png')
 
         np_lsq = np.asarray(list_lsq)
-        np_eff_pred = np.asarray(list_eff_pred)
-
-        np_dy_prd_idx = np.abs(np.asarray(list_dy_prd)) > 0.002
-        np_eff_pred_cl = np_eff_pred[np_dy_prd_idx]
-        neff_cl = (np_eff_pred_cl > 0.).sum() / np_eff_pred_cl.size
 
         return {"lsq": np_lsq,
-                "efficiency": np_eff_pred,
-                "performance": neff_cl,
+                "correlation": np.array(list_corr_index),
+                "pvalue": np.array(list_corr_pvalue),
                 "dy_ref": np.asarray(list_dy_ref),
                 "dy_prd": np.asarray(list_dy_prd),
-                "reference": list_dy_ref,
                 "forecast": list_y_prd,
                 }
 
@@ -481,52 +482,33 @@ class OptSignalDecompForecast:
         assert bclen >= 0, f"bclen should be greater or equal than 0, bclen is {bclen}"
         assert nsignal > 1, f"nsignal should be greater than 1, nsignal is {nsignal}"
 
-        quantile = 0.5
-        decomp_idx = np.arange(0, decomplen + bclen)
-        list_loss = []
-        list_dy_ref = []
-        list_dy_prd = []
-        list_eff_pred = []
+        # Optimization Variables
+        out_res = self.objective(pd.Series({'window': dsvars[0],
+                                            'decomplen': dsvars[1],
+                                            'bclen': dsvars[2],
+                                            'nsignal': dsvars[3]}))
 
-        for i, idx_i in enumerate(tqdm(self.np_idx_inc_eval[:self.run_size], desc="Processing")):
-            decomp_idx_i = decomp_idx + (idx_i - decomplen)
+        overall_correlation = np.median(out_res['correlation']).item()
 
-            # Input Signal (X), where Y := F(X)
-            sr_data_rs_i = self.sr_data_rs.iloc[decomp_idx_i]
-            sr_x_ft_i = self._filter(sr_data_rs_i)
+        # Combined cost function (weighted sum)
+        # Weights can be tuned based on your priorities
+        w_corr = 10.0           # Weight for correlation term
+        w_lsq = 5.0             # Weight for LSQ term
+        w_low_corr = 5.0        # Weight for low correlation penalty
+        w_pvalue = 2.0          # Weight for p-value penalty
+        np_wg = np.array([-w_corr, w_lsq, w_low_corr, w_pvalue])
 
-            # First Signal Decomposition
-            pd_signal_decomp_i = self._signal_decomposition(sr_x_ft_i, nsignal)
+        low_corr_penalty = np.sum(out_res['correlation'] < 0.5).item() / self.run_size
+        high_pvalue_penalty = np.sum(out_res['pvalue'] > 0.05).item() / self.run_size
 
-            # Forecast the signal
-            pd_forecast_i = self._forecast_signal(pd_signal_decomp_i[-(window + bclen):],
-                                                  bclen, plot_path=None)
+        eqv_loss = np.array([
+                np.median(out_res['correlation']).item(),               # Maximize correlation
+                out_res["lsq"].sum().item() / self.run_size,            # Minimize cost function (LSQ)
+                low_corr_penalty,                                       # Penalize low correlations
+                high_pvalue_penalty,                                    # Penalize non-significant results
+            ])
 
-            # Reference
-            sr_y_i = self.sr_data_rs[pd_forecast_i.index[bclen:]]
-            dy_i = (sr_y_i.values[-1] - sr_x_ft_i.values[-1]) / (sr_y_i.size + 1)
-            list_dy_ref.append(dy_i)
-
-            # Prediction
-            sr_y_prd_i = pd_forecast_i["mean"][bclen:]
-            dy_prd_i = (sr_y_prd_i.values[-1] - sr_y_prd_i.values[0]) / sr_y_prd_i.size
-            list_dy_prd.append(dy_prd_i)
-
-            y_eff_prd_i = dy_prd_i / (dy_i + 1.e-9)
-            list_eff_pred.append(y_eff_prd_i)
-
-            # Calculate LSQ cost function
-            np_diff_i = sr_y_i.values - sr_y_prd_i.values
-            list_loss.append(np.mean(np.maximum(quantile * np_diff_i, (quantile - 1) * np_diff_i)))
-
-        np_loss = np.asarray(list_loss)
-        np_eff_pred = np.asarray(list_eff_pred)
-
-        np_dy_prd_idx = np.abs(np.asarray(list_dy_prd)) > 0.002
-        np_eff_pred_cl = np_eff_pred[np_dy_prd_idx]
-        neff_cl = (np_eff_pred_cl > 0.).sum() / np_eff_pred_cl.size
-
-        eqv_loss = np_loss.sum() / 10. - neff_cl
+        eqv_loss_sum = np.dot(np_wg, eqv_loss)
 
         self.loss_info["iter"].append(self._iter)
         self.loss_info["window"].append(window)
@@ -534,16 +516,19 @@ class OptSignalDecompForecast:
         self.loss_info["bclen"].append(bclen)
         self.loss_info["nsignal"].append(nsignal)
 
-        self.loss_info["cost"].append(eqv_loss)
-        self.loss_info["efficiency"].append((np_eff_pred > 0.1).sum().item() / np_eff_pred.size)
-        self.loss_info["performance"].append(neff_cl)
+        self.loss_info["cost"].append(eqv_loss_sum)
+        self.loss_info["correlation"].append(overall_correlation)
+        self.loss_info["correlation_sum"].append(np.sum(out_res['correlation']).item())
+        self.loss_info["correlation_median"].append(np.median(out_res['correlation']).item())
+        self.loss_info["pvalue"].append(np.mean(out_res['pvalue']))
 
-        print(f" >>> Iter.: {self._iter}, Processing DSVARS: {dsvars}, LSQ Value: {eqv_loss}, Performance: {neff_cl}")
+        print(f" >>> Iter.: {self._iter}, Processing DSVARS: {dsvars}, LSQ Value: {eqv_loss_sum}, "
+              f"Avg. Correlation {overall_correlation}, Mean P-value: {np.mean(out_res['pvalue'])}")
 
         self._write_csv()
         self._iter += 1
 
-        return eqv_loss
+        return eqv_loss_sum
 
     def opt_trade(self, td_dsvars: np.ndarray) -> float:
 
@@ -783,16 +768,17 @@ def main_opt_forecast(opt: bool = True):
     # dt = 15
     dt = 60
 
-    # dtype = "ewt"
+    dtype = "ewt"
     # dtype = "xwt"
     # dtype = "swt"
     # dtype = "emd"
-    dtype = "ssa"
+    # dtype = "ssa"
 
     # run_size = 30
     # run_size = 100
     # run_size = 200
-    run_size = 300
+    # run_size = 300
+    run_size = 500
 
     if dt == 15:
         out_len = 12
@@ -802,24 +788,24 @@ def main_opt_forecast(opt: bool = True):
     elif dt == 60:
         out_len = 8
         np_dsvars = np.asarray([307, 1118, 1, 3])
-        bounds = [(100, 1500), (100, 1500), (0, 10), (2, 20)]  # dt60
+        bounds = [(100, 1500), (100, 1500), (0, 10), (3, 20)]  # dt60
 
     else:
         raise NotImplementedError
 
-    opt_ewt_forecst = OptSignalDecompForecast(input_data=dict_price_data[dt],
+    opt_decomp_forecst = OptSignalDecompForecast(input_data=dict_price_data[dt],
                                               out_len=out_len,
                                               inc_len=50,
                                               plt_len=120,
                                               seed=seed,
                                               dtype=dtype,
                                               ftype="",
-                                              # plot_flag=True,
+                                              plot_flag=not opt,
                                               run_size=run_size,
                                               )
 
     if opt:
-        # res_i = opt_ewt_forecst.objective_scipy(np_dsvars)
+        res_out = opt_decomp_forecst.objective_scipy(np_dsvars)
         integrality = [True, True, True, True]
 
         # Define the linear constraint: x2 - x1 >= 100
@@ -831,7 +817,7 @@ def main_opt_forecast(opt: bool = True):
 
         # Run the differential evolution solver
         result = differential_evolution(
-            opt_ewt_forecst.objective_scipy,
+            opt_decomp_forecst.objective_scipy,
             bounds,
             x0=np_dsvars,
             constraints=constraint,
@@ -853,14 +839,25 @@ def main_opt_forecast(opt: bool = True):
 
 
 def main_opt_trade():
+
+    # dt = 15
+    dt = 60
+
     input_data_path = (Path(__file__).parent.parent.parent / "tests" / "data" / "btcusd_2022-06-01.joblib").resolve()
     dict_price_data = load(input_data_path)
-    # dt = 15
-    # out_len = 12
 
-    dt = 60
-    # out_len = 8
-    out_len = 16
+    if dt == 15:
+        out_len = 12
+        sr_opt_forecast = pd.Series(dict(window=1600, decomplen=1900, bclen=3, nsignal=6))
+
+    elif dt == 60:
+        out_len = 8
+        # sr_opt_forecast = pd.Series(dict(window=200, decomplen=600, bclen=1, nsignal=8))
+        sr_opt_forecast = pd.Series(dict(window=700, decomplen=5200, bclen=4, nsignal=7))
+
+    else:
+        out_len = 10
+        sr_opt_forecast = pd.Series(dict(window=700, decomplen=5200, bclen=4, nsignal=7))
 
     seed = 42
     dtype = "swt"
@@ -868,6 +865,8 @@ def main_opt_trade():
 
     run_size = 50
     # run_size = 300
+    # run_size = 500
+
     opt_ewt_forecst = OptSignalDecompForecast(input_data=dict_price_data[dt],
                                               out_len=out_len,
                                               inc_len=50,
@@ -878,13 +877,6 @@ def main_opt_trade():
                                               plot_flag=True,
                                               run_size=run_size,
                                               )
-
-    # dt 15
-    # sr_opt_forecast = pd.Series(dict(window=1600, decomplen=1900, bclen=3, nsignal=6))
-
-    # dt 60
-    # sr_opt_forecast = pd.Series(dict(window=200, decomplen=600, bclen=1, nsignal=8))
-    sr_opt_forecast = pd.Series(dict(window=700, decomplen=5200, bclen=4, nsignal=7))
 
     opt_ewt_forecst._prd_dsvars = sr_opt_forecast
 
@@ -914,10 +906,12 @@ def main_opt_trade():
     # result = minimize(opt_ewt_forecst.opt_trade, np_opt_trade, method='Nelder-Mead', bounds=bounds)
 
     # print(f"Optimization result: {result}")
-    test = 1.
 
 
 if __name__ == "__main__":
     # main_search_forecast()
-    main_opt_forecast()
+
+    # main_opt_forecast(opt=True)
+    main_opt_forecast(opt=False)
+
     # main_opt_trade()

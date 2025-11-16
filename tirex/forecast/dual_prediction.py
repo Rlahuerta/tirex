@@ -146,7 +146,7 @@ class DualOptForecast:
         Update the input data and re-preprocess.
         """
 
-        new_data, _ = get_latest_bitmex_data(symbol='XBTUSD', hours=4, dt=15, plot=False)
+        new_data, _ = get_latest_bitmex_data(symbol='XBTUSD', hours=1, dt=15, plot=False)
 
         # Concatenate and remove duplicates by index
         combined_data = pd.concat([self.input_data, new_data])
@@ -517,20 +517,30 @@ def main_opt_prediction():
                                   run_size=run_size,
                                   )
 
-    for i in range(20):
+    # ftime = 1800        # 30 minutes
+    # ftime = 900         # 15 minutes
+
+    for i in range(100):
+        opt_forecst.update_input_data()
         opt_forecst.prediction()
 
         if i < 99:
+            # Get the timestamp of the latest ticker
+            ticker_minute_i = opt_forecst.input_data.index[-1].minute
+            current_time_i = datetime.datetime.now().minute
+            min_diff_i = 15 - (current_time_i - ticker_minute_i) + 0.2
+            adjusted_wait = int(abs(min_diff_i) * 60.)
+
             for remaining in tqdm(
-                    # range(1800, 0, -1),       # 30 minutes
-                    range(900, 0, -1),       # 15 minutes
-                    desc="⏳ Next prediction in",
+                    range(adjusted_wait, 0, -1),
+                    desc=f"Trial {i}, ⏳ Next prediction in",
                     unit="s",
                     colour="green",
                     bar_format="{l_bar}{bar}| {remaining}s left"
             ):
                 time.sleep(1)
-            opt_forecst.update_input_data()
+
+            print("\n")
 
 
 if __name__ == "__main__":

@@ -370,8 +370,13 @@ def _add_candlestick(ax, tickers: pd.DataFrame, dt: int = None):
 
     if dt is None or dt == 60:
         width, width2 = 0.04, 0.01
+
     elif dt == 15:
-        width, width2 = 0.01, 0.002
+        width, width2 = 0.01, 0.0025
+
+    elif dt == 5:
+        width, width2 = 0.01 / 3, 0.001
+
     else:
         raise NotImplementedError
 
@@ -454,9 +459,15 @@ def plot_mpl_ticker(input_tickers: pd.DataFrame,
     if time_increment == 60:
         ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
         ax.xaxis.set_minor_locator(mdates.HourLocator(interval=4))
+
     elif time_increment == 15:
         ax.xaxis.set_major_locator(mdates.HourLocator(interval=6))
         ax.xaxis.set_minor_locator(mdates.HourLocator(interval=1))
+
+    elif time_increment == 5:
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+        ax.xaxis.set_minor_locator(mdates.MinuteLocator(interval=15))
+
     else:
         raise NotImplementedError
 

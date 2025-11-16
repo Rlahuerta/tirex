@@ -339,38 +339,73 @@ def fetch_and_plot_latest_btc(
     return data, figure
 
 
-if __name__ == '__main__':
+def example_usage():
+    """
+    Example usage of fetch_and_plot_latest_btc function.
+
+    This function demonstrates how to fetch the latest Bitcoin data
+    and display summary statistics along with the plot.
+    """
     # Example usage
     import sys
-    
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
+
     print("Fetching latest Bitcoin data from BitMEX...")
     print("This will take a few moments...")
-    
+
     try:
         # Fetch 24 hours of 15-minute data
         df, fig = fetch_and_plot_latest_btc(hours=24)
-        
-        print("\n" + "="*60)
+
+        print("\n" + "=" * 60)
         print("DATA SUMMARY")
-        print("="*60)
+        print("=" * 60)
         print(f"Data points: {len(df)}")
         print(f"Time range: {df.index[0]} to {df.index[-1]}")
         print(f"\nLatest prices:")
         print(df[['open', 'high', 'low', 'close', 'volume']].tail())
-        print("="*60)
-        
+        print("=" * 60)
+
         # Optionally save
         # save_path = Path('bitcoin_latest.png')
         # fig.savefig(save_path, dpi=300, bbox_inches='tight')
         # print(f"\nPlot saved to {save_path}")
-        
+
         plt.show()
-        
+
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
         sys.exit(1)
+
+
+def example_save_ticker_data():
+    """
+    Example of fetching and saving Bitcoin data to parquet.
+    """
+    from pathlib import Path
+
+    current_file_path = Path(__file__).parent.parent.parent
+    parquete_path = current_file_path / "Signals/data"
+    parquete_path.mkdir(parents=True, exist_ok=True)
+
+    dt = 5
+    nhours = 80000
+
+    print("Fetching latest Bitcoin data from BitMEX...")
+    df, _ = get_latest_bitmex_data(symbol='XBTUSD', hours=nhours, dt=dt, plot=False,)
+
+    fn_name = f"btcusd_{dt}m_{df.index[-1].strftime('%Y-%m-%d')}"
+    save_path = parquete_path / f"{fn_name}.parquet"
+
+    df.to_parquet(save_path)
+    print(f"Data saved to {save_path}")
+
+
+if __name__ == '__main__':
+
+    # example_usage()
+    example_save_ticker_data()
